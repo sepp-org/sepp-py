@@ -149,6 +149,16 @@ A handler's outcome decides the job's fate:
 - raising `HandlerError.permanent(reason)` → nack straight to the dead-letter queue
 - raising any other exception → nack for retry (caught so it can't crash the worker)
 
+A job whose `job_type` has no registered handler is nacked for retry. Register a
+catch-all handler to process those instead:
+
+```python
+@worker.catch_all
+async def fallback(payload, ctx):
+    logging.warning("no handler for %s", ctx.job_type)
+    ...                          # same outcomes as a normal handler
+```
+
 Trigger a graceful shutdown from a signal handler:
 
 ```python

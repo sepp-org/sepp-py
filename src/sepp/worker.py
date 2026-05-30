@@ -149,6 +149,7 @@ class Worker:
         self._opts = ReserveOptions(list(queues), lease_duration, **opts_kwargs)  # type: ignore[arg-type]
         self._client = client
         self._handlers: dict[str, Handler] = {}
+        self._catch_all_handler: Handler | None = None
         self._max_in_flight = max(1, max_in_flight)
         self._reserve_error_backoff = reserve_error_backoff
         if auto_extend or auto_extend_interval is not None:
@@ -185,6 +186,17 @@ class Worker:
         """Unregister the handler for ``job_type``, if any."""
         self._handlers.pop(job_type, None)
         return self
+
+    def catch_all(self, handler: Handler) -> Handler:
+        """Register a catch-all handler for job types without a specific
+        handler, overwriting any previously registered one. Returns the
+        handler, so it doubles as a decorator::
+
+            @worker.catch_all
+            async def fallback(payload, ctx): ...
+        """
+        self._catch_all_handler = handler
+        return handler
 
     def handler(self, job_type: str) -> Callable[[Handler], Handler]:
         """Decorator form of :meth:`handle`::
@@ -325,7 +337,7 @@ class Worker:
 
     async def _run_job(self, job: Job) -> None:
         ctx = job.ctx
-        handler = self._handlers.get(ctx.job_type)
+        handler = self._handlers.get(ctx.job_type) or self._catch_all_handler
         if handler is None:
             logger.warning("no handler registered for job_type `%s`", ctx.job_type)
             # Mirror the Rust client: nack for retry, ignoring the outcome.

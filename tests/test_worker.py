@@ -167,6 +167,26 @@ async def test_no_handler_nacks() -> None:
     assert client.nacked and client.nacked[0][0] == VALID_UUID
 
 
+async def test_catch_all_handles_unregistered_type() -> None:
+    client = FakeClient([])
+    client._batches = [[make_job(client, "unhandled")]]
+    ready = asyncio.Event()
+    seen: list[str] = []
+    worker = Worker(client, ["q"], timedelta(seconds=30))  # type: ignore[arg-type]
+    worker.handle("other", lambda payload, ctx: asyncio.sleep(0))
+
+    async def catch_all(payload, ctx):
+        seen.append(ctx.job_type)
+        ready.set()
+
+    worker.catch_all(catch_all)
+
+    await drive(worker, ready)
+    assert seen == ["unhandled"]
+    assert client.acked == [VALID_UUID]
+    assert client.nacked == []
+
+
 # -- registration -----------------------------------------------------------
 
 
