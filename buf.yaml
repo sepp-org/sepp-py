@@ -1,0 +1,20 @@
+# This package vendors the sepp wire contract under `proto/queue.proto`. It is
+# NOT the source of truth: the contract lives in the sepp `proto` repo and is
+# published to buf.build/sepp-org/sepp-proto, where lint/breaking checks are
+# enforced.
+#
+# buf is not part of the build — `grpc_tools.protoc` compiles the vendored file
+# directly (see scripts/gen_proto.sh), and the generated stubs are committed
+# under src/sepp/_pb/, so installing the package needs no protoc or buf.
+#
+# The vendored copy has the canonical `buf.validate` annotations stripped: the
+# client never enforces them (validation is server-side), so dropping them lets
+# codegen produce a self-contained module with no buf/validate dependency. This
+# file exists only to document provenance and how to refresh the snapshot:
+#
+#     buf export buf.build/sepp-org/sepp-proto:v1.0.0 -o proto
+#     # then strip the `import "buf/validate/validate.proto";` line and every
+#     # `[(buf.validate.*)]` field option / `option (buf.validate.oneof)` line.
+version: v2
+modules:
+  - path: proto

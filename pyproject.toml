@@ -1,0 +1,89 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "sepp"
+version = "0.1.0"
+description = "An async Python client for the sepp durable job queue."
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+authors = [{ name = "sepp-org" }]
+keywords = ["sepp", "job-queue", "grpc", "asyncio", "worker"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Framework :: AsyncIO",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Software Development :: Libraries",
+    "Typing :: Typed",
+]
+dependencies = [
+    "grpcio>=1.68",
+    "protobuf>=5.27",
+]
+
+[project.optional-dependencies]
+# Mirrors the Rust client's default-on `opentelemetry` feature: spans, metrics,
+# and W3C trace-context propagation from producer to worker.
+otel = [
+    "opentelemetry-api>=1.20",
+    "opentelemetry-sdk>=1.20",
+]
+
+[project.urls]
+Homepage = "https://github.com/sepp-org/sepp"
+Protocol = "https://github.com/sepp-org/proto"
+
+[dependency-groups]
+dev = [
+    "grpcio-tools>=1.68",
+    "mypy>=1.11",
+    "mypy-protobuf>=3.6",
+    "pytest>=8.0",
+    "pytest-asyncio>=0.24",
+    "ruff>=0.6",
+    # exercised by examples/traced.py
+    "opentelemetry-exporter-otlp-proto-grpc>=1.20",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/sepp"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.ruff]
+src = ["src", "tests", "examples"]
+line-length = 100
+extend-exclude = ["src/sepp/_pb"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "W"]
+
+[tool.mypy]
+python_version = "3.10"
+strict = true
+# Tests use deliberately loose fakes (object stand-ins, type: ignore); they are
+# validated by running them, not by mypy.
+files = ["src/sepp", "examples"]
+# Generated protobuf stubs are excluded from strict checking.
+exclude = ["src/sepp/_pb/"]
+
+[[tool.mypy.overrides]]
+module = "sepp._pb.*"
+ignore_errors = true
+follow_imports = "skip"
+
+# grpc and opentelemetry do not ship complete type information.
+[[tool.mypy.overrides]]
+module = ["grpc", "grpc.*", "opentelemetry", "opentelemetry.*"]
+ignore_missing_imports = true
