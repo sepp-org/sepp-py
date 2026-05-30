@@ -84,6 +84,8 @@ from sepp.errors import (
     UnknownRejection,
 )
 from sepp.types import (
+    DeadLetterCause,
+    DeadLetterRecord,
     EnqueueAck,
     EnqueueRequest,
     Job,
@@ -133,6 +135,8 @@ __all__ = [
     "JobCtx",
     "ReserveOptions",
     "ServerInfo",
+    "DeadLetterCause",
+    "DeadLetterRecord",
     # errors — base + transport/protocol
     "SeppError",
     "ClientError",

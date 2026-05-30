@@ -25,7 +25,15 @@ import grpc.aio
 from sepp import _convert, _otel, errors
 from sepp._pb import queue_pb2 as pb
 from sepp._pb import queue_pb2_grpc as pb_grpc
-from sepp.types import EnqueueAck, EnqueueRequest, Job, JobCtx, ReserveOptions, ServerInfo
+from sepp.types import (
+    DeadLetterRecord,
+    EnqueueAck,
+    EnqueueRequest,
+    Job,
+    JobCtx,
+    ReserveOptions,
+    ServerInfo,
+)
 
 __all__ = ["SeppClient", "RetryPolicy", "RetryDirective", "Lease"]
 
@@ -485,6 +493,43 @@ class SeppClient:
             return _convert.server_info_from_pb(resp)
         except errors.ServerInfoError as exc:
             raise errors.MalformedServerInfoError(exc) from exc
+
+    async def drain_dead_letters(
+        self, queue: str | None = None, max_records: int = 1
+    ) -> list[DeadLetterRecord]:
+        """Drain dead-lettered jobs for inspection and manual replay.
+
+        Returns up to ``max_records`` :class:`~sepp.types.DeadLetterRecord`
+        (oldest-first, optionally filtered to one ``queue``) and **removes them
+        from the server**. This is destructive: the records are gone once
+        returned, so a dropped response loses exactly that batch — for that
+        reason it is **not** retried by the :class:`RetryPolicy`. Inspect each
+        record, then replay any you want with
+        :meth:`DeadLetterRecord.to_enqueue_request
+        <sepp.types.DeadLetterRecord.to_enqueue_request>`.
+
+        An empty list means nothing matched, which is indistinguishable from
+        dead-letter retention being disabled — check
+        :attr:`ServerInfo.dead_letter_retention_enabled
+        <sepp.types.ServerInfo.dead_letter_retention_enabled>`.
+        """
+        req = pb.DrainDeadLettersRequest(max=max(max_records, 1))
+        if queue is not None:
+            req.queue = queue
+
+        with _otel.client_span("sepp.drain_dead_letters"):
+            try:
+                resp = await self._stub.DrainDeadLetters(req, metadata=self._call_metadata())
+            except grpc.aio.AioRpcError as err:
+                raise errors.client_error_from_rpc(err) from err
+
+        records: list[DeadLetterRecord] = []
+        for r in resp.records:
+            try:
+                records.append(_convert.dead_letter_record_from_pb(r))
+            except errors.JobConversionError as exc:
+                logger.warning("skipping malformed dead-letter record in drain response: %s", exc)
+        return records
 
     def _call_metadata(self) -> list[tuple[str, str]]:
         metadata = list(self._auth_metadata)

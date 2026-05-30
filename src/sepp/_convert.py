@@ -12,6 +12,8 @@ from typing import TYPE_CHECKING
 from sepp import errors
 from sepp._pb import queue_pb2 as pb
 from sepp.types import (
+    DeadLetterCause,
+    DeadLetterRecord,
     EnqueueAck,
     EnqueueRequest,
     Job,
@@ -218,6 +220,7 @@ def server_info_from_pb(r: pb.GetServerInfoResponse) -> ServerInfo:
         max_wait_timeout_ms=r.max_wait_timeout_ms,
         max_lease_duration_ms=r.max_lease_duration_ms,
         strict_queues=r.strict_queues,
+        dead_letter_retention_enabled=r.dead_letter_retention_enabled,
     )
 
 
@@ -260,6 +263,7 @@ def job_from_pb(client: SeppClient, j: pb.Job, worker_id: str | None) -> Job:
     lease = Lease(client, j.id, j.attempt, lease_expires_at, worker_id)
     ctx = JobCtx(
         id=j.id,
+        queue=j.queue,
         job_type=j.job_type,
         priority=priority,
         attempt=j.attempt,
@@ -271,3 +275,63 @@ def job_from_pb(client: SeppClient, j: pb.Job, worker_id: str | None) -> Job:
         _lease=lease,
     )
     return Job(payload=payload, ctx=ctx)
+
+
+_CAUSE_FROM_PB = {
+    pb.DeadLetterCause.DEAD_LETTER_CAUSE_ATTEMPTS_EXHAUSTED: DeadLetterCause.ATTEMPTS_EXHAUSTED,
+    pb.DeadLetterCause.DEAD_LETTER_CAUSE_REJECTED: DeadLetterCause.REJECTED,
+    pb.DeadLetterCause.DEAD_LETTER_CAUSE_LEASE_EXPIRED: DeadLetterCause.LEASE_EXPIRED,
+}
+
+
+def dead_letter_record_from_pb(r: pb.DeadLetterRecord) -> DeadLetterRecord:
+    if not r.HasField("job"):
+        raise errors.JobConversionError("dead-letter record is missing required field `job`")
+    j = r.job
+    if not j.id:
+        raise errors.JobConversionError("job is missing required field `id`")
+    if not j.job_type:
+        raise errors.JobConversionError("job is missing required field `job_type`")
+
+    try:
+        priority = Priority(j.priority)
+    except PriorityOutOfRangeError as exc:
+        raise errors.JobConversionError(
+            f"job priority {j.priority} is out of range (expected 0-9)"
+        ) from exc
+
+    enqueued_at = millis_to_datetime(j.enqueued_at)
+    if enqueued_at is None:
+        raise errors.JobConversionError(
+            f"job timestamp `enqueued_at` is not a representable time ({j.enqueued_at}ms)"
+        )
+    failed_at = millis_to_datetime(r.failed_at)
+    if failed_at is None:
+        raise errors.JobConversionError(
+            f"dead-letter timestamp `failed_at` is not a representable time ({r.failed_at}ms)"
+        )
+
+    custom: dict[str, Primitive] = {}
+    for key, pv in j.custom.items():
+        value = primitive_from_pb(pv)
+        if value is None:
+            raise errors.JobConversionError(f"custom value for key `{key}` has no value set")
+        custom[key] = value
+
+    trace_context = trace_context_from_pb(j.trace_context) if j.HasField("trace_context") else None
+    payload = payload_from_pb(j.payload) if j.HasField("payload") else None
+
+    return DeadLetterRecord(
+        queue=j.queue,
+        job_id=j.id,
+        job_type=j.job_type,
+        payload=payload,
+        priority=priority,
+        custom=custom,
+        trace_context=trace_context,
+        enqueued_at=enqueued_at,
+        cause=_CAUSE_FROM_PB.get(r.cause, DeadLetterCause.UNSPECIFIED),
+        failed_at=failed_at,
+        final_attempt=r.final_attempt,
+        last_reason=r.last_reason if r.HasField("last_reason") else None,
+    )

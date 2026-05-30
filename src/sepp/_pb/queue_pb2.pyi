@@ -1,11 +1,23 @@
 from google.protobuf import empty_pb2 as _empty_pb2
 from google.protobuf.internal import containers as _containers
+from google.protobuf.internal import enum_type_wrapper as _enum_type_wrapper
 from google.protobuf import descriptor as _descriptor
 from google.protobuf import message as _message
 from collections.abc import Iterable as _Iterable, Mapping as _Mapping
 from typing import ClassVar as _ClassVar, Optional as _Optional, Union as _Union
 
 DESCRIPTOR: _descriptor.FileDescriptor
+
+class DeadLetterCause(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
+    __slots__ = ()
+    DEAD_LETTER_CAUSE_UNSPECIFIED: _ClassVar[DeadLetterCause]
+    DEAD_LETTER_CAUSE_ATTEMPTS_EXHAUSTED: _ClassVar[DeadLetterCause]
+    DEAD_LETTER_CAUSE_REJECTED: _ClassVar[DeadLetterCause]
+    DEAD_LETTER_CAUSE_LEASE_EXPIRED: _ClassVar[DeadLetterCause]
+DEAD_LETTER_CAUSE_UNSPECIFIED: DeadLetterCause
+DEAD_LETTER_CAUSE_ATTEMPTS_EXHAUSTED: DeadLetterCause
+DEAD_LETTER_CAUSE_REJECTED: DeadLetterCause
+DEAD_LETTER_CAUSE_LEASE_EXPIRED: DeadLetterCause
 
 class PrimitiveValue(_message.Message):
     __slots__ = ("string_value", "double_value", "int_value", "bool_value")
@@ -36,7 +48,7 @@ class Payload(_message.Message):
     def __init__(self, data: _Optional[bytes] = ..., encoding: _Optional[str] = ...) -> None: ...
 
 class Job(_message.Message):
-    __slots__ = ("id", "job_type", "payload", "priority", "trace_context", "enqueued_at", "attempt", "max_attempts", "lease_expires_at", "custom", "scheduled_at")
+    __slots__ = ("id", "job_type", "payload", "priority", "trace_context", "enqueued_at", "attempt", "max_attempts", "lease_expires_at", "custom", "scheduled_at", "queue")
     class CustomEntry(_message.Message):
         __slots__ = ("key", "value")
         KEY_FIELD_NUMBER: _ClassVar[int]
@@ -55,6 +67,7 @@ class Job(_message.Message):
     LEASE_EXPIRES_AT_FIELD_NUMBER: _ClassVar[int]
     CUSTOM_FIELD_NUMBER: _ClassVar[int]
     SCHEDULED_AT_FIELD_NUMBER: _ClassVar[int]
+    QUEUE_FIELD_NUMBER: _ClassVar[int]
     id: str
     job_type: str
     payload: Payload
@@ -66,7 +79,8 @@ class Job(_message.Message):
     lease_expires_at: int
     custom: _containers.MessageMap[str, PrimitiveValue]
     scheduled_at: int
-    def __init__(self, id: _Optional[str] = ..., job_type: _Optional[str] = ..., payload: _Optional[_Union[Payload, _Mapping]] = ..., priority: _Optional[int] = ..., trace_context: _Optional[_Union[TraceContext, _Mapping]] = ..., enqueued_at: _Optional[int] = ..., attempt: _Optional[int] = ..., max_attempts: _Optional[int] = ..., lease_expires_at: _Optional[int] = ..., custom: _Optional[_Mapping[str, PrimitiveValue]] = ..., scheduled_at: _Optional[int] = ...) -> None: ...
+    queue: str
+    def __init__(self, id: _Optional[str] = ..., job_type: _Optional[str] = ..., payload: _Optional[_Union[Payload, _Mapping]] = ..., priority: _Optional[int] = ..., trace_context: _Optional[_Union[TraceContext, _Mapping]] = ..., enqueued_at: _Optional[int] = ..., attempt: _Optional[int] = ..., max_attempts: _Optional[int] = ..., lease_expires_at: _Optional[int] = ..., custom: _Optional[_Mapping[str, PrimitiveValue]] = ..., scheduled_at: _Optional[int] = ..., queue: _Optional[str] = ...) -> None: ...
 
 class JobRejection(_message.Message):
     __slots__ = ("unknown_queue", "payload_too_large", "encoding_not_allowed", "job_type_not_allowed", "custom_entries_too_many", "custom_map_too_large", "custom_key_too_long", "queue_name_too_long", "job_type_name_too_long", "idempotency_key_too_long", "scheduled_too_far", "invalid_request")
@@ -363,12 +377,40 @@ class ExtendResponse(_message.Message):
     lease_expires_at: int
     def __init__(self, job_id: _Optional[str] = ..., lease_expires_at: _Optional[int] = ...) -> None: ...
 
+class DeadLetterRecord(_message.Message):
+    __slots__ = ("job", "cause", "failed_at", "final_attempt", "last_reason")
+    JOB_FIELD_NUMBER: _ClassVar[int]
+    CAUSE_FIELD_NUMBER: _ClassVar[int]
+    FAILED_AT_FIELD_NUMBER: _ClassVar[int]
+    FINAL_ATTEMPT_FIELD_NUMBER: _ClassVar[int]
+    LAST_REASON_FIELD_NUMBER: _ClassVar[int]
+    job: Job
+    cause: DeadLetterCause
+    failed_at: int
+    final_attempt: int
+    last_reason: str
+    def __init__(self, job: _Optional[_Union[Job, _Mapping]] = ..., cause: _Optional[_Union[DeadLetterCause, str]] = ..., failed_at: _Optional[int] = ..., final_attempt: _Optional[int] = ..., last_reason: _Optional[str] = ...) -> None: ...
+
+class DrainDeadLettersRequest(_message.Message):
+    __slots__ = ("queue", "max")
+    QUEUE_FIELD_NUMBER: _ClassVar[int]
+    MAX_FIELD_NUMBER: _ClassVar[int]
+    queue: str
+    max: int
+    def __init__(self, queue: _Optional[str] = ..., max: _Optional[int] = ...) -> None: ...
+
+class DrainDeadLettersResponse(_message.Message):
+    __slots__ = ("records",)
+    RECORDS_FIELD_NUMBER: _ClassVar[int]
+    records: _containers.RepeatedCompositeFieldContainer[DeadLetterRecord]
+    def __init__(self, records: _Optional[_Iterable[_Union[DeadLetterRecord, _Mapping]]] = ...) -> None: ...
+
 class GetServerInfoRequest(_message.Message):
     __slots__ = ()
     def __init__(self) -> None: ...
 
 class GetServerInfoResponse(_message.Message):
-    __slots__ = ("server_version", "supported_protocol_versions", "server_time_ms", "restricts_encodings", "allowed_encodings", "max_payload_bytes", "max_custom_entries", "max_custom_total_bytes", "max_custom_key_bytes", "max_queue_name_bytes", "max_job_type_bytes", "max_idempotency_key_bytes", "max_schedule_horizon_ms", "max_enqueue_batch", "max_reserve_batch", "max_reserve_queues", "max_wait_timeout_ms", "max_lease_duration_ms", "strict_queues")
+    __slots__ = ("server_version", "supported_protocol_versions", "server_time_ms", "restricts_encodings", "allowed_encodings", "max_payload_bytes", "max_custom_entries", "max_custom_total_bytes", "max_custom_key_bytes", "max_queue_name_bytes", "max_job_type_bytes", "max_idempotency_key_bytes", "max_schedule_horizon_ms", "max_enqueue_batch", "max_reserve_batch", "max_reserve_queues", "max_wait_timeout_ms", "max_lease_duration_ms", "strict_queues", "dead_letter_retention_enabled")
     SERVER_VERSION_FIELD_NUMBER: _ClassVar[int]
     SUPPORTED_PROTOCOL_VERSIONS_FIELD_NUMBER: _ClassVar[int]
     SERVER_TIME_MS_FIELD_NUMBER: _ClassVar[int]
@@ -388,6 +430,7 @@ class GetServerInfoResponse(_message.Message):
     MAX_WAIT_TIMEOUT_MS_FIELD_NUMBER: _ClassVar[int]
     MAX_LEASE_DURATION_MS_FIELD_NUMBER: _ClassVar[int]
     STRICT_QUEUES_FIELD_NUMBER: _ClassVar[int]
+    DEAD_LETTER_RETENTION_ENABLED_FIELD_NUMBER: _ClassVar[int]
     server_version: str
     supported_protocol_versions: _containers.RepeatedScalarFieldContainer[str]
     server_time_ms: int
@@ -407,4 +450,5 @@ class GetServerInfoResponse(_message.Message):
     max_wait_timeout_ms: int
     max_lease_duration_ms: int
     strict_queues: bool
-    def __init__(self, server_version: _Optional[str] = ..., supported_protocol_versions: _Optional[_Iterable[str]] = ..., server_time_ms: _Optional[int] = ..., restricts_encodings: bool = ..., allowed_encodings: _Optional[_Iterable[str]] = ..., max_payload_bytes: _Optional[int] = ..., max_custom_entries: _Optional[int] = ..., max_custom_total_bytes: _Optional[int] = ..., max_custom_key_bytes: _Optional[int] = ..., max_queue_name_bytes: _Optional[int] = ..., max_job_type_bytes: _Optional[int] = ..., max_idempotency_key_bytes: _Optional[int] = ..., max_schedule_horizon_ms: _Optional[int] = ..., max_enqueue_batch: _Optional[int] = ..., max_reserve_batch: _Optional[int] = ..., max_reserve_queues: _Optional[int] = ..., max_wait_timeout_ms: _Optional[int] = ..., max_lease_duration_ms: _Optional[int] = ..., strict_queues: bool = ...) -> None: ...
+    dead_letter_retention_enabled: bool
+    def __init__(self, server_version: _Optional[str] = ..., supported_protocol_versions: _Optional[_Iterable[str]] = ..., server_time_ms: _Optional[int] = ..., restricts_encodings: bool = ..., allowed_encodings: _Optional[_Iterable[str]] = ..., max_payload_bytes: _Optional[int] = ..., max_custom_entries: _Optional[int] = ..., max_custom_total_bytes: _Optional[int] = ..., max_custom_key_bytes: _Optional[int] = ..., max_queue_name_bytes: _Optional[int] = ..., max_job_type_bytes: _Optional[int] = ..., max_idempotency_key_bytes: _Optional[int] = ..., max_schedule_horizon_ms: _Optional[int] = ..., max_enqueue_batch: _Optional[int] = ..., max_reserve_batch: _Optional[int] = ..., max_reserve_queues: _Optional[int] = ..., max_wait_timeout_ms: _Optional[int] = ..., max_lease_duration_ms: _Optional[int] = ..., strict_queues: bool = ..., dead_letter_retention_enabled: bool = ...) -> None: ...

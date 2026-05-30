@@ -84,6 +84,11 @@ class QueueServiceStub(object):
                 request_serializer=queue__pb2.ExtendRequest.SerializeToString,
                 response_deserializer=queue__pb2.ExtendResponse.FromString,
                 _registered_method=True)
+        self.DrainDeadLetters = channel.unary_unary(
+                '/sepp.v1.QueueService/DrainDeadLetters',
+                request_serializer=queue__pb2.DrainDeadLettersRequest.SerializeToString,
+                response_deserializer=queue__pb2.DrainDeadLettersResponse.FromString,
+                _registered_method=True)
         self.GetServerInfo = channel.unary_unary(
                 '/sepp.v1.QueueService/GetServerInfo',
                 request_serializer=queue__pb2.GetServerInfoRequest.SerializeToString,
@@ -187,6 +192,28 @@ class QueueServiceServicer(object):
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def DrainDeadLetters(self, request, context):
+        """Drain dead-lettered jobs for inspection and manual replay.
+
+        Returns up to `max` DeadLetterRecords (oldest-first, optionally filtered to
+        a single queue) and REMOVES them from the server in the same transaction
+        before responding. This is destructive and privileged: there is no
+        redelivery token (unlike Reserve/Ack), so a dropped response permanently
+        loses exactly the returned batch.
+
+        An empty list means nothing matched, which is indistinguishable from
+        dead-letter retention being disabled — check dead_letter_retention_enabled
+        in GetServerInfo.
+
+        gRPC status codes:
+        INVALID_ARGUMENT  - request shape is malformed
+        UNAUTHENTICATED   - missing or invalid API key
+        INTERNAL          - server-side storage failure
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
     def GetServerInfo(self, request, context):
         """Get server info and capabilities. INTERNAL on storage failure; otherwise infallible.
         """
@@ -226,6 +253,11 @@ def add_QueueServiceServicer_to_server(servicer, server):
                     servicer.Extend,
                     request_deserializer=queue__pb2.ExtendRequest.FromString,
                     response_serializer=queue__pb2.ExtendResponse.SerializeToString,
+            ),
+            'DrainDeadLetters': grpc.unary_unary_rpc_method_handler(
+                    servicer.DrainDeadLetters,
+                    request_deserializer=queue__pb2.DrainDeadLettersRequest.FromString,
+                    response_serializer=queue__pb2.DrainDeadLettersResponse.SerializeToString,
             ),
             'GetServerInfo': grpc.unary_unary_rpc_method_handler(
                     servicer.GetServerInfo,
@@ -415,6 +447,33 @@ class QueueService(object):
             '/sepp.v1.QueueService/Extend',
             queue__pb2.ExtendRequest.SerializeToString,
             queue__pb2.ExtendResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def DrainDeadLetters(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/sepp.v1.QueueService/DrainDeadLetters',
+            queue__pb2.DrainDeadLettersRequest.SerializeToString,
+            queue__pb2.DrainDeadLettersResponse.FromString,
             options,
             channel_credentials,
             insecure,

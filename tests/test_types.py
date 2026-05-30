@@ -184,6 +184,7 @@ def test_payload_fields() -> None:
 def test_jobctx_str() -> None:
     ctx = JobCtx(
         id="abc",
+        queue="emails",
         job_type="send_email",
         priority=Priority(3),
         attempt=2,
@@ -200,6 +201,7 @@ def test_jobctx_str() -> None:
 async def test_jobctx_extend_without_lease_raises() -> None:
     ctx = JobCtx(
         id="abc",
+        queue="q",
         job_type="t",
         priority=Priority(0),
         attempt=1,

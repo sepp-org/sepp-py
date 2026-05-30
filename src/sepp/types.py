@@ -9,6 +9,7 @@ kept entirely in :mod:`sepp._convert`; nothing here imports the generated stubs.
 from __future__ import annotations
 
 import contextlib
+import enum
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any, ClassVar
@@ -34,6 +35,8 @@ __all__ = [
     "Job",
     "ReserveOptions",
     "ServerInfo",
+    "DeadLetterCause",
+    "DeadLetterRecord",
 ]
 
 # A JSON-primitive value stored in a job's ``custom`` metadata map. Unlike the
@@ -245,6 +248,7 @@ class JobCtx:
     """
 
     id: str
+    queue: str
     job_type: str
     priority: Priority
     attempt: int
@@ -341,3 +345,60 @@ class ServerInfo:
     max_wait_timeout_ms: int
     max_lease_duration_ms: int
     strict_queues: bool
+    dead_letter_retention_enabled: bool
+    """If ``True``, the server retains dead-lettered jobs and
+    :meth:`~sepp.client.SeppClient.drain_dead_letters` can return them; if
+    ``False``, dead jobs are deleted and drain always returns empty."""
+
+
+class DeadLetterCause(enum.Enum):
+    """Why a job was moved to the server's dead-letter store. Mirrors the three
+    terminal paths a job can take."""
+
+    UNSPECIFIED = "unspecified"
+    """The cause was unset — an unknown or future variant."""
+    ATTEMPTS_EXHAUSTED = "attempts_exhausted"
+    """The job exhausted its max attempts across nacks and redeliveries."""
+    REJECTED = "rejected"
+    """A worker nacked with ``RetryDirective.DEAD_LETTER``, skipping its
+    remaining attempts."""
+    LEASE_EXPIRED = "lease_expired"
+    """The lease expired while the job was on its final attempt."""
+
+
+@dataclass(frozen=True)
+class DeadLetterRecord:
+    """A dead-lettered job retained by the server, returned by
+    :meth:`~sepp.client.SeppClient.drain_dead_letters`.
+
+    A snapshot for inspection and manual replay: read :attr:`cause`,
+    :attr:`last_reason`, and :attr:`final_attempt` to see what went wrong, then
+    call :meth:`to_enqueue_request` to re-submit it.
+    """
+
+    queue: str
+    job_id: str
+    job_type: str
+    payload: Payload | None
+    priority: Priority
+    custom: dict[str, Primitive]
+    trace_context: TraceContext | None
+    enqueued_at: datetime
+    cause: DeadLetterCause
+    failed_at: datetime
+    final_attempt: int
+    last_reason: str | None
+
+    def to_enqueue_request(self) -> EnqueueRequest:
+        """Build an :class:`EnqueueRequest` that replays this job into its
+        original queue, preserving its payload, priority, custom metadata, and
+        trace context. The replay is a fresh job — the server assigns a new id
+        and resets the attempt counter."""
+        return EnqueueRequest(
+            queue=self.queue,
+            job_type=self.job_type,
+            payload=self.payload,
+            priority=self.priority,
+            custom=dict(self.custom),
+            trace_context=self.trace_context,
+        )

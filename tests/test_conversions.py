@@ -14,7 +14,7 @@ from tests.conftest import (
 
 from sepp import _convert, errors
 from sepp._pb import queue_pb2 as pb
-from sepp.types import EnqueueRequest, Payload, Priority, TraceContext
+from sepp.types import DeadLetterCause, EnqueueRequest, Payload, Priority, TraceContext
 
 # -- time helpers -----------------------------------------------------------
 
@@ -304,6 +304,7 @@ def test_server_info_happy_path() -> None:
     assert info.max_payload_size == 1024
     assert info.max_lease_duration_ms == 60_000
     assert info.strict_queues is True
+    assert info.dead_letter_retention_enabled is False
     assert info.server_time == datetime(1970, 1, 1, tzinfo=timezone.utc) + timedelta(
         milliseconds=1_700_000_000_000
     )
@@ -329,6 +330,7 @@ def test_server_info_invalid_time() -> None:
 def _valid_job() -> pb.Job:
     return pb.Job(
         id=VALID_UUID,
+        queue="emails",
         job_type="send_email",
         priority=3,
         enqueued_at=1_700_000_000_000,
@@ -346,6 +348,7 @@ def test_job_from_pb_happy_path() -> None:
     j.custom["k"].string_value = "v"
     job = _convert.job_from_pb(client, j, None)
     assert job.ctx.id == VALID_UUID
+    assert job.ctx.queue == "emails"
     assert job.ctx.job_type == "send_email"
     assert job.ctx.priority == Priority(3)
     assert job.ctx.attempt == 1 and job.ctx.max_attempts == 5
@@ -420,3 +423,65 @@ def test_job_from_pb_preserves_valid_trace_context() -> None:
     assert job.ctx.trace_context is not None
     assert job.ctx.trace_context.traceparent == VALID_TP
     assert job.ctx.trace_context.tracestate == "v=1"
+
+
+# -- dead_letter_record_from_pb ---------------------------------------------
+
+
+def _valid_dead_letter() -> pb.DeadLetterRecord:
+    return pb.DeadLetterRecord(
+        job=_valid_job(),
+        cause=pb.DeadLetterCause.DEAD_LETTER_CAUSE_ATTEMPTS_EXHAUSTED,
+        failed_at=1_700_000_100_000,
+        final_attempt=5,
+        last_reason="boom",
+    )
+
+
+def test_dead_letter_record_from_pb() -> None:
+    r = _convert.dead_letter_record_from_pb(_valid_dead_letter())
+    assert r.job_id == VALID_UUID
+    assert r.queue == "emails"
+    assert r.job_type == "send_email"
+    assert r.cause == DeadLetterCause.ATTEMPTS_EXHAUSTED
+    assert r.final_attempt == 5
+    assert r.last_reason == "boom"
+    assert r.priority == Priority(3)
+    assert r.failed_at == datetime(1970, 1, 1, tzinfo=timezone.utc) + timedelta(
+        milliseconds=1_700_000_100_000
+    )
+
+
+def test_dead_letter_record_missing_job() -> None:
+    msg = _valid_dead_letter()
+    msg.ClearField("job")
+    with pytest.raises(errors.JobConversionError, match="job"):
+        _convert.dead_letter_record_from_pb(msg)
+
+
+def test_dead_letter_record_lease_expired_has_no_reason() -> None:
+    msg = _valid_dead_letter()
+    msg.cause = pb.DeadLetterCause.DEAD_LETTER_CAUSE_LEASE_EXPIRED
+    msg.ClearField("last_reason")
+    r = _convert.dead_letter_record_from_pb(msg)
+    assert r.cause == DeadLetterCause.LEASE_EXPIRED
+    assert r.last_reason is None
+
+
+def test_dead_letter_record_unknown_cause_is_unspecified() -> None:
+    msg = _valid_dead_letter()
+    msg.cause = 9999
+    r = _convert.dead_letter_record_from_pb(msg)
+    assert r.cause == DeadLetterCause.UNSPECIFIED
+
+
+def test_dead_letter_record_replays_into_its_queue() -> None:
+    msg = _valid_dead_letter()
+    msg.job.payload.data = b"\x01\x02\x03"
+    msg.job.payload.encoding = "json"
+    req = _convert.dead_letter_record_from_pb(msg).to_enqueue_request()
+    assert isinstance(req, EnqueueRequest)
+    assert req.queue == "emails"
+    assert req.job_type == "send_email"
+    assert req.priority == Priority(3)
+    assert req.payload is not None and req.payload.data == b"\x01\x02\x03"
