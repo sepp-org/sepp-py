@@ -62,10 +62,11 @@ def make_job(client: object, job_type: str, job_id: str = VALID_UUID) -> Job:
         id=job_id,
         job_type=job_type,
         priority=1,
-        enqueued_at=1_700_000_000_000,
+        enqueued_at=datetime(1970, 1, 1, tzinfo=timezone.utc)
+        + timedelta(milliseconds=1_700_000_000_000),
         attempt=1,
         max_attempts=3,
-        lease_expires_at=_convert.now_millis() + 60_000,
+        lease_expires_at=datetime.now(timezone.utc) + timedelta(seconds=60),
     )
     return _convert.job_from_pb(client, j, "worker-1")  # type: ignore[arg-type]
 

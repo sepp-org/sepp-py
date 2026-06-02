@@ -338,12 +338,12 @@ class ServerInfo:
     max_queue_name_bytes: int
     max_job_type_bytes: int
     max_idempotency_key_bytes: int
-    max_schedule_horizon_ms: int
+    max_schedule_horizon: timedelta
     max_enqueue_batch: int
     max_reserve_batch: int
     max_reserve_queues: int
-    max_wait_timeout_ms: int
-    max_lease_duration_ms: int
+    max_wait_timeout: timedelta
+    max_lease_duration: timedelta
     strict_queues: bool
     dead_letter_retention_enabled: bool
     """If ``True``, the server retains dead-lettered jobs and

@@ -424,7 +424,7 @@ class SeppClient:
         nack_retry = pb.NackRetry()
         if retry.kind == "after":
             assert retry.delay is not None
-            nack_retry.delay_ms = _convert.timedelta_to_millis(retry.delay)
+            nack_retry.delay.FromTimedelta(retry.delay)
         elif retry.kind == "dead_letter":
             nack_retry.dead_letter.SetInParent()
         else:
@@ -455,11 +455,8 @@ class SeppClient:
     async def _extend_inner(
         self, job_id: str, attempt: int, extension: timedelta, worker_id: str | None
     ) -> datetime:
-        req = pb.ExtendRequest(
-            job_id=job_id,
-            attempt=attempt,
-            lease_duration_ms=_convert.timedelta_to_millis(extension),
-        )
+        req = pb.ExtendRequest(job_id=job_id, attempt=attempt)
+        req.lease_duration.FromTimedelta(extension)
         if worker_id is not None:
             req.worker_id = worker_id
 
@@ -471,7 +468,7 @@ class SeppClient:
             except grpc.aio.AioRpcError as err:
                 raise errors.lease_error_from_rpc(err) from err
 
-        expiry = _convert.millis_to_datetime(resp.lease_expires_at)
+        expiry = _convert.timestamp_to_datetime(resp.lease_expires_at)
         if expiry is None:
             raise errors.MalformedResponseError("extend returned an invalid lease_expires_at")
         return expiry

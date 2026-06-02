@@ -147,7 +147,10 @@ def test_enqueue_request_to_pb_all_fields() -> None:
     assert m.max_attempts == 5
     assert m.custom["k"].int_value == 1
     assert m.HasField("trace_context")
-    assert m.scheduled_at == 1234
+    assert m.HasField("scheduled_at")
+    assert m.scheduled_at.ToDatetime(tzinfo=timezone.utc) == datetime(
+        1970, 1, 1, tzinfo=timezone.utc
+    ) + timedelta(milliseconds=1234)
 
 
 def test_enqueue_request_scheduled_pre_epoch_dropped() -> None:
@@ -199,11 +202,13 @@ def test_job_rejection_custom_key_too_long() -> None:
 
 
 def test_job_rejection_scheduled_too_far() -> None:
-    r = _convert.job_rejection_from_pb(
-        _rej(scheduled_too_far=pb.ScheduledTooFar(horizon_ms=60_000, actual_ms=120_000))
-    )
+    stf = pb.ScheduledTooFar()
+    stf.horizon.FromTimedelta(timedelta(minutes=1))
+    stf.actual.FromDatetime(datetime(2023, 11, 14, 22, 13, 20, tzinfo=timezone.utc))
+    r = _convert.job_rejection_from_pb(_rej(scheduled_too_far=stf))
     assert isinstance(r, errors.ScheduledTooFar)
-    assert r.horizon_ms == 60_000 and r.actual_ms == 120_000
+    assert r.horizon == timedelta(minutes=1)
+    assert r.actual == datetime(2023, 11, 14, 22, 13, 20, tzinfo=timezone.utc)
 
 
 def test_job_rejection_invalid_request() -> None:
@@ -229,7 +234,7 @@ def test_job_rejection_messages_render() -> None:
         errors.QueueNameTooLong(1, 2),
         errors.JobTypeNameTooLong(1, 2),
         errors.IdempotencyKeyTooLong(1, 2),
-        errors.ScheduledTooFar(1, 2),
+        errors.ScheduledTooFar(timedelta(minutes=1), datetime(2023, 1, 1, tzinfo=timezone.utc)),
         errors.InvalidRequest("m"),
         errors.UnknownRejection(),
     ):
@@ -265,8 +270,8 @@ def test_reserve_options_to_pb() -> None:
     )
     m = _convert.reserve_options_to_pb(opts)
     assert list(m.queues) == ["q1", "q2"]
-    assert m.wait_timeout_ms == 2000
-    assert m.lease_duration_ms == 5000
+    assert m.wait_timeout.ToTimedelta() == timedelta(seconds=2)
+    assert m.lease_duration.ToTimedelta() == timedelta(seconds=5)
     assert m.worker_id == "w"
     assert m.max_jobs == 7
 
@@ -278,7 +283,8 @@ def _valid_server_info() -> pb.GetServerInfoResponse:
     return pb.GetServerInfoResponse(
         server_version="1.2.3",
         supported_protocol_versions=["v1"],
-        server_time_ms=1_700_000_000_000,
+        server_time=datetime(1970, 1, 1, tzinfo=timezone.utc)
+        + timedelta(milliseconds=1_700_000_000_000),
         restricts_encodings=False,
         allowed_encodings=["json"],
         max_payload_bytes=1024,
@@ -288,12 +294,12 @@ def _valid_server_info() -> pb.GetServerInfoResponse:
         max_queue_name_bytes=512,
         max_job_type_bytes=256,
         max_idempotency_key_bytes=128,
-        max_schedule_horizon_ms=86_400_000,
+        max_schedule_horizon=timedelta(milliseconds=86_400_000),
         max_enqueue_batch=100,
         max_reserve_batch=50,
         max_reserve_queues=8,
-        max_wait_timeout_ms=30_000,
-        max_lease_duration_ms=60_000,
+        max_wait_timeout=timedelta(milliseconds=30_000),
+        max_lease_duration=timedelta(milliseconds=60_000),
         strict_queues=True,
     )
 
@@ -302,7 +308,7 @@ def test_server_info_happy_path() -> None:
     info = _convert.server_info_from_pb(_valid_server_info())
     assert info.version == "1.2.3"
     assert info.max_payload_size == 1024
-    assert info.max_lease_duration_ms == 60_000
+    assert info.max_lease_duration == timedelta(milliseconds=60_000)
     assert info.strict_queues is True
     assert info.dead_letter_retention_enabled is False
     assert info.server_time == datetime(1970, 1, 1, tzinfo=timezone.utc) + timedelta(
@@ -319,8 +325,8 @@ def test_server_info_missing_version() -> None:
 
 def test_server_info_invalid_time() -> None:
     msg = _valid_server_info()
-    msg.server_time_ms = -1
-    with pytest.raises(errors.ServerInfoError, match="server_time_ms"):
+    msg.server_time.seconds = -1
+    with pytest.raises(errors.ServerInfoError, match="server_time"):
         _convert.server_info_from_pb(msg)
 
 
@@ -333,10 +339,12 @@ def _valid_job() -> pb.Job:
         queue="emails",
         job_type="send_email",
         priority=3,
-        enqueued_at=1_700_000_000_000,
+        enqueued_at=datetime(1970, 1, 1, tzinfo=timezone.utc)
+        + timedelta(milliseconds=1_700_000_000_000),
         attempt=1,
         max_attempts=5,
-        lease_expires_at=1_700_000_060_000,
+        lease_expires_at=datetime(1970, 1, 1, tzinfo=timezone.utc)
+        + timedelta(milliseconds=1_700_000_060_000),
     )
 
 
@@ -385,7 +393,7 @@ def test_job_from_pb_priority_out_of_range(priority: int) -> None:
 def test_job_from_pb_invalid_enqueued_at() -> None:
     client = make_client(FakeStub())
     j = _valid_job()
-    j.enqueued_at = -1
+    j.enqueued_at.seconds = -1
     with pytest.raises(errors.JobConversionError, match="enqueued_at"):
         _convert.job_from_pb(client, j, None)
 
@@ -393,7 +401,7 @@ def test_job_from_pb_invalid_enqueued_at() -> None:
 def test_job_from_pb_invalid_lease_expires_at() -> None:
     client = make_client(FakeStub())
     j = _valid_job()
-    j.lease_expires_at = -5
+    j.lease_expires_at.seconds = -5
     with pytest.raises(errors.JobConversionError, match="lease_expires_at"):
         _convert.job_from_pb(client, j, None)
 
@@ -432,7 +440,8 @@ def _valid_dead_letter() -> pb.DeadLetterRecord:
     return pb.DeadLetterRecord(
         job=_valid_job(),
         cause=pb.DeadLetterCause.DEAD_LETTER_CAUSE_ATTEMPTS_EXHAUSTED,
-        failed_at=1_700_000_100_000,
+        failed_at=datetime(1970, 1, 1, tzinfo=timezone.utc)
+        + timedelta(milliseconds=1_700_000_100_000),
         final_attempt=5,
         last_reason="boom",
     )

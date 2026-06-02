@@ -17,6 +17,7 @@ exceptions:
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timedelta
 
 import grpc
 
@@ -329,16 +330,19 @@ class IdempotencyKeyTooLong(JobRejection):
 
 @dataclass(frozen=True)
 class ScheduledTooFar(JobRejection):
-    """``scheduled_at`` is further out than ``max_schedule_horizon_ms``."""
+    """``scheduled_at`` is further out than the server's schedule horizon.
 
-    horizon_ms: int
-    actual_ms: int
+    :attr:`actual` is the requested run time (an absolute instant) and
+    :attr:`horizon` is the maximum scheduling distance the server allows."""
+
+    horizon: timedelta
+    actual: datetime
 
     @property
     def message(self) -> str:
         return (
-            f"scheduled_at {self.actual_ms}ms is beyond "
-            f"max_schedule_horizon_ms ({self.horizon_ms}ms)"
+            f"scheduled_at {self.actual.isoformat()} is beyond "
+            f"the schedule horizon ({self.horizon})"
         )
 
 

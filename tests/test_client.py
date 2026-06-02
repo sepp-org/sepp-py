@@ -46,10 +46,12 @@ def _valid_job_pb() -> pb.Job:
         id=VALID_UUID,
         job_type="t",
         priority=1,
-        enqueued_at=1_700_000_000_000,
+        enqueued_at=datetime(1970, 1, 1, tzinfo=timezone.utc)
+        + timedelta(milliseconds=1_700_000_000_000),
         attempt=1,
         max_attempts=3,
-        lease_expires_at=1_700_000_060_000,
+        lease_expires_at=datetime(1970, 1, 1, tzinfo=timezone.utc)
+        + timedelta(milliseconds=1_700_000_060_000),
     )
 
 
@@ -233,7 +235,7 @@ async def test_nack_directives_map_to_strategy() -> None:
     for directive, expected in [
         (RetryDirective.DEFAULT, "default"),
         (RetryDirective.dead_letter(), "dead_letter"),
-        (RetryDirective.after(timedelta(seconds=2)), "delay_ms"),
+        (RetryDirective.after(timedelta(seconds=2)), "delay"),
     ]:
         stub = FakeStub()
         stub.Nack = FakeUnaryUnary(pb.NackResponse(job_id=VALID_UUID, dead_lettered=True))
@@ -242,14 +244,18 @@ async def test_nack_directives_map_to_strategy() -> None:
         assert dead is True
         req = stub.Nack.last_request  # type: ignore[attr-defined]
         assert req.retry.WhichOneof("strategy") == expected
-        if expected == "delay_ms":
-            assert req.retry.delay_ms == 2000
+        if expected == "delay":
+            assert req.retry.delay.ToTimedelta() == timedelta(seconds=2)
 
 
 async def test_extend_returns_new_expiry() -> None:
     stub = FakeStub()
     stub.Extend = FakeUnaryUnary(
-        pb.ExtendResponse(job_id=VALID_UUID, lease_expires_at=1_700_000_120_000)
+        pb.ExtendResponse(
+            job_id=VALID_UUID,
+            lease_expires_at=datetime(1970, 1, 1, tzinfo=timezone.utc)
+            + timedelta(milliseconds=1_700_000_120_000),
+        )
     )
     client = make_client(stub)
     expiry = await client.extend(_ctx(client), timedelta(seconds=60))
@@ -257,12 +263,14 @@ async def test_extend_returns_new_expiry() -> None:
         milliseconds=1_700_000_120_000
     )
     req = stub.Extend.last_request  # type: ignore[attr-defined]
-    assert req.lease_duration_ms == 60_000
+    assert req.lease_duration.ToTimedelta() == timedelta(seconds=60)
 
 
 async def test_extend_invalid_expiry_raises() -> None:
     stub = FakeStub()
-    stub.Extend = FakeUnaryUnary(pb.ExtendResponse(job_id=VALID_UUID, lease_expires_at=-1))
+    resp = pb.ExtendResponse(job_id=VALID_UUID)
+    resp.lease_expires_at.seconds = -1
+    stub.Extend = FakeUnaryUnary(resp)
     client = make_client(stub)
     with pytest.raises(errors.MalformedResponseError):
         await client.extend(_ctx(client), timedelta(seconds=60))
@@ -275,7 +283,9 @@ async def test_get_server_info() -> None:
     stub = FakeStub()
     stub.GetServerInfo = FakeUnaryUnary(
         pb.GetServerInfoResponse(
-            server_version="1.0.0", supported_protocol_versions=["v1"], server_time_ms=1
+            server_version="1.0.0",
+            supported_protocol_versions=["v1"],
+            server_time=datetime(1970, 1, 1, tzinfo=timezone.utc) + timedelta(milliseconds=1),
         )
     )
     client = make_client(stub)
@@ -286,7 +296,10 @@ async def test_get_server_info() -> None:
 async def test_get_server_info_malformed() -> None:
     stub = FakeStub()
     stub.GetServerInfo = FakeUnaryUnary(
-        pb.GetServerInfoResponse(server_version="", server_time_ms=1)
+        pb.GetServerInfoResponse(
+            server_version="",
+            server_time=datetime(1970, 1, 1, tzinfo=timezone.utc) + timedelta(milliseconds=1),
+        )
     )
     client = make_client(stub)
     with pytest.raises(errors.MalformedServerInfoError):

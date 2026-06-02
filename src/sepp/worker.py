@@ -144,6 +144,7 @@ class Worker:
     ) -> None:
         resolved_worker_id = _default_worker_id() if worker_id is None else worker_id
         opts_kwargs: dict[str, object] = {"worker_id": resolved_worker_id, "max_jobs": max_jobs}
+
         if wait_timeout is not None:
             opts_kwargs["wait_timeout"] = wait_timeout
         self._opts = ReserveOptions(list(queues), lease_duration, **opts_kwargs)  # type: ignore[arg-type]
@@ -152,6 +153,7 @@ class Worker:
         self._catch_all_handler: Handler | None = None
         self._max_in_flight = max(1, max_in_flight)
         self._reserve_error_backoff = reserve_error_backoff
+
         if auto_extend or auto_extend_interval is not None:
             interval = (
                 auto_extend_interval
@@ -164,6 +166,7 @@ class Worker:
             )
         else:
             self._auto_extend = None
+
         self._shutdown = ShutdownHandle()
         self._metrics = _otel.WorkerMetrics()
         self._in_flight = 0

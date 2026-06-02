@@ -12,7 +12,7 @@
 # codegen produce a self-contained module with no buf/validate dependency. This
 # file exists only to document provenance and how to refresh the snapshot:
 #
-#     buf export buf.build/sepp-org/sepp-proto:v1.0.1 -o proto
+#     buf export buf.build/sepp-org/sepp-proto:v1.1.0 -o proto
 #     # then strip the `import "buf/validate/validate.proto";` line and every
 #     # `[(buf.validate.*)]` field option / `option (buf.validate.oneof)` line.
 version: v2

@@ -1,4 +1,8 @@
+import datetime
+
+from google.protobuf import duration_pb2 as _duration_pb2
 from google.protobuf import empty_pb2 as _empty_pb2
+from google.protobuf import timestamp_pb2 as _timestamp_pb2
 from google.protobuf.internal import containers as _containers
 from google.protobuf.internal import enum_type_wrapper as _enum_type_wrapper
 from google.protobuf import descriptor as _descriptor
@@ -73,14 +77,14 @@ class Job(_message.Message):
     payload: Payload
     priority: int
     trace_context: TraceContext
-    enqueued_at: int
+    enqueued_at: _timestamp_pb2.Timestamp
     attempt: int
     max_attempts: int
-    lease_expires_at: int
+    lease_expires_at: _timestamp_pb2.Timestamp
     custom: _containers.MessageMap[str, PrimitiveValue]
-    scheduled_at: int
+    scheduled_at: _timestamp_pb2.Timestamp
     queue: str
-    def __init__(self, id: _Optional[str] = ..., job_type: _Optional[str] = ..., payload: _Optional[_Union[Payload, _Mapping]] = ..., priority: _Optional[int] = ..., trace_context: _Optional[_Union[TraceContext, _Mapping]] = ..., enqueued_at: _Optional[int] = ..., attempt: _Optional[int] = ..., max_attempts: _Optional[int] = ..., lease_expires_at: _Optional[int] = ..., custom: _Optional[_Mapping[str, PrimitiveValue]] = ..., scheduled_at: _Optional[int] = ..., queue: _Optional[str] = ...) -> None: ...
+    def __init__(self, id: _Optional[str] = ..., job_type: _Optional[str] = ..., payload: _Optional[_Union[Payload, _Mapping]] = ..., priority: _Optional[int] = ..., trace_context: _Optional[_Union[TraceContext, _Mapping]] = ..., enqueued_at: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ..., attempt: _Optional[int] = ..., max_attempts: _Optional[int] = ..., lease_expires_at: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ..., custom: _Optional[_Mapping[str, PrimitiveValue]] = ..., scheduled_at: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ..., queue: _Optional[str] = ...) -> None: ...
 
 class JobRejection(_message.Message):
     __slots__ = ("unknown_queue", "payload_too_large", "encoding_not_allowed", "job_type_not_allowed", "custom_entries_too_many", "custom_map_too_large", "custom_key_too_long", "queue_name_too_long", "job_type_name_too_long", "idempotency_key_too_long", "scheduled_too_far", "invalid_request")
@@ -191,12 +195,12 @@ class IdempotencyKeyTooLong(_message.Message):
     def __init__(self, limit: _Optional[int] = ..., actual: _Optional[int] = ...) -> None: ...
 
 class ScheduledTooFar(_message.Message):
-    __slots__ = ("horizon_ms", "actual_ms")
-    HORIZON_MS_FIELD_NUMBER: _ClassVar[int]
-    ACTUAL_MS_FIELD_NUMBER: _ClassVar[int]
-    horizon_ms: int
-    actual_ms: int
-    def __init__(self, horizon_ms: _Optional[int] = ..., actual_ms: _Optional[int] = ...) -> None: ...
+    __slots__ = ("horizon", "actual")
+    HORIZON_FIELD_NUMBER: _ClassVar[int]
+    ACTUAL_FIELD_NUMBER: _ClassVar[int]
+    horizon: _duration_pb2.Duration
+    actual: _timestamp_pb2.Timestamp
+    def __init__(self, horizon: _Optional[_Union[datetime.timedelta, _duration_pb2.Duration, _Mapping]] = ..., actual: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ...) -> None: ...
 
 class InvalidRequest(_message.Message):
     __slots__ = ("message",)
@@ -230,8 +234,8 @@ class EnqueueRequest(_message.Message):
     max_attempts: int
     trace_context: TraceContext
     custom: _containers.MessageMap[str, PrimitiveValue]
-    scheduled_at: int
-    def __init__(self, queue: _Optional[str] = ..., job_type: _Optional[str] = ..., payload: _Optional[_Union[Payload, _Mapping]] = ..., idempotency_key: _Optional[str] = ..., priority: _Optional[int] = ..., max_attempts: _Optional[int] = ..., trace_context: _Optional[_Union[TraceContext, _Mapping]] = ..., custom: _Optional[_Mapping[str, PrimitiveValue]] = ..., scheduled_at: _Optional[int] = ...) -> None: ...
+    scheduled_at: _timestamp_pb2.Timestamp
+    def __init__(self, queue: _Optional[str] = ..., job_type: _Optional[str] = ..., payload: _Optional[_Union[Payload, _Mapping]] = ..., idempotency_key: _Optional[str] = ..., priority: _Optional[int] = ..., max_attempts: _Optional[int] = ..., trace_context: _Optional[_Union[TraceContext, _Mapping]] = ..., custom: _Optional[_Mapping[str, PrimitiveValue]] = ..., scheduled_at: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ...) -> None: ...
 
 class EnqueueResponse(_message.Message):
     __slots__ = ("job_id", "deduplicated")
@@ -290,18 +294,18 @@ class JobValidationError(_message.Message):
     def __init__(self, index: _Optional[int] = ..., rejection: _Optional[_Union[JobRejection, _Mapping]] = ...) -> None: ...
 
 class ReserveRequest(_message.Message):
-    __slots__ = ("queues", "wait_timeout_ms", "lease_duration_ms", "worker_id", "max_jobs")
+    __slots__ = ("queues", "wait_timeout", "lease_duration", "worker_id", "max_jobs")
     QUEUES_FIELD_NUMBER: _ClassVar[int]
-    WAIT_TIMEOUT_MS_FIELD_NUMBER: _ClassVar[int]
-    LEASE_DURATION_MS_FIELD_NUMBER: _ClassVar[int]
+    WAIT_TIMEOUT_FIELD_NUMBER: _ClassVar[int]
+    LEASE_DURATION_FIELD_NUMBER: _ClassVar[int]
     WORKER_ID_FIELD_NUMBER: _ClassVar[int]
     MAX_JOBS_FIELD_NUMBER: _ClassVar[int]
     queues: _containers.RepeatedScalarFieldContainer[str]
-    wait_timeout_ms: int
-    lease_duration_ms: int
+    wait_timeout: _duration_pb2.Duration
+    lease_duration: _duration_pb2.Duration
     worker_id: str
     max_jobs: int
-    def __init__(self, queues: _Optional[_Iterable[str]] = ..., wait_timeout_ms: _Optional[int] = ..., lease_duration_ms: _Optional[int] = ..., worker_id: _Optional[str] = ..., max_jobs: _Optional[int] = ...) -> None: ...
+    def __init__(self, queues: _Optional[_Iterable[str]] = ..., wait_timeout: _Optional[_Union[datetime.timedelta, _duration_pb2.Duration, _Mapping]] = ..., lease_duration: _Optional[_Union[datetime.timedelta, _duration_pb2.Duration, _Mapping]] = ..., worker_id: _Optional[str] = ..., max_jobs: _Optional[int] = ...) -> None: ...
 
 class ReserveResponse(_message.Message):
     __slots__ = ("jobs",)
@@ -340,14 +344,14 @@ class NackRequest(_message.Message):
     def __init__(self, job_id: _Optional[str] = ..., attempt: _Optional[int] = ..., reason: _Optional[str] = ..., retry: _Optional[_Union[NackRetry, _Mapping]] = ..., worker_id: _Optional[str] = ...) -> None: ...
 
 class NackRetry(_message.Message):
-    __slots__ = ("default", "delay_ms", "dead_letter")
+    __slots__ = ("default", "delay", "dead_letter")
     DEFAULT_FIELD_NUMBER: _ClassVar[int]
-    DELAY_MS_FIELD_NUMBER: _ClassVar[int]
+    DELAY_FIELD_NUMBER: _ClassVar[int]
     DEAD_LETTER_FIELD_NUMBER: _ClassVar[int]
     default: _empty_pb2.Empty
-    delay_ms: int
+    delay: _duration_pb2.Duration
     dead_letter: _empty_pb2.Empty
-    def __init__(self, default: _Optional[_Union[_empty_pb2.Empty, _Mapping]] = ..., delay_ms: _Optional[int] = ..., dead_letter: _Optional[_Union[_empty_pb2.Empty, _Mapping]] = ...) -> None: ...
+    def __init__(self, default: _Optional[_Union[_empty_pb2.Empty, _Mapping]] = ..., delay: _Optional[_Union[datetime.timedelta, _duration_pb2.Duration, _Mapping]] = ..., dead_letter: _Optional[_Union[_empty_pb2.Empty, _Mapping]] = ...) -> None: ...
 
 class NackResponse(_message.Message):
     __slots__ = ("job_id", "dead_lettered")
@@ -358,24 +362,24 @@ class NackResponse(_message.Message):
     def __init__(self, job_id: _Optional[str] = ..., dead_lettered: bool = ...) -> None: ...
 
 class ExtendRequest(_message.Message):
-    __slots__ = ("job_id", "attempt", "lease_duration_ms", "worker_id")
+    __slots__ = ("job_id", "attempt", "lease_duration", "worker_id")
     JOB_ID_FIELD_NUMBER: _ClassVar[int]
     ATTEMPT_FIELD_NUMBER: _ClassVar[int]
-    LEASE_DURATION_MS_FIELD_NUMBER: _ClassVar[int]
+    LEASE_DURATION_FIELD_NUMBER: _ClassVar[int]
     WORKER_ID_FIELD_NUMBER: _ClassVar[int]
     job_id: str
     attempt: int
-    lease_duration_ms: int
+    lease_duration: _duration_pb2.Duration
     worker_id: str
-    def __init__(self, job_id: _Optional[str] = ..., attempt: _Optional[int] = ..., lease_duration_ms: _Optional[int] = ..., worker_id: _Optional[str] = ...) -> None: ...
+    def __init__(self, job_id: _Optional[str] = ..., attempt: _Optional[int] = ..., lease_duration: _Optional[_Union[datetime.timedelta, _duration_pb2.Duration, _Mapping]] = ..., worker_id: _Optional[str] = ...) -> None: ...
 
 class ExtendResponse(_message.Message):
     __slots__ = ("job_id", "lease_expires_at")
     JOB_ID_FIELD_NUMBER: _ClassVar[int]
     LEASE_EXPIRES_AT_FIELD_NUMBER: _ClassVar[int]
     job_id: str
-    lease_expires_at: int
-    def __init__(self, job_id: _Optional[str] = ..., lease_expires_at: _Optional[int] = ...) -> None: ...
+    lease_expires_at: _timestamp_pb2.Timestamp
+    def __init__(self, job_id: _Optional[str] = ..., lease_expires_at: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ...) -> None: ...
 
 class DeadLetterRecord(_message.Message):
     __slots__ = ("job", "cause", "failed_at", "final_attempt", "last_reason")
@@ -386,10 +390,10 @@ class DeadLetterRecord(_message.Message):
     LAST_REASON_FIELD_NUMBER: _ClassVar[int]
     job: Job
     cause: DeadLetterCause
-    failed_at: int
+    failed_at: _timestamp_pb2.Timestamp
     final_attempt: int
     last_reason: str
-    def __init__(self, job: _Optional[_Union[Job, _Mapping]] = ..., cause: _Optional[_Union[DeadLetterCause, str]] = ..., failed_at: _Optional[int] = ..., final_attempt: _Optional[int] = ..., last_reason: _Optional[str] = ...) -> None: ...
+    def __init__(self, job: _Optional[_Union[Job, _Mapping]] = ..., cause: _Optional[_Union[DeadLetterCause, str]] = ..., failed_at: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ..., final_attempt: _Optional[int] = ..., last_reason: _Optional[str] = ...) -> None: ...
 
 class DrainDeadLettersRequest(_message.Message):
     __slots__ = ("queue", "max")
@@ -410,10 +414,10 @@ class GetServerInfoRequest(_message.Message):
     def __init__(self) -> None: ...
 
 class GetServerInfoResponse(_message.Message):
-    __slots__ = ("server_version", "supported_protocol_versions", "server_time_ms", "restricts_encodings", "allowed_encodings", "max_payload_bytes", "max_custom_entries", "max_custom_total_bytes", "max_custom_key_bytes", "max_queue_name_bytes", "max_job_type_bytes", "max_idempotency_key_bytes", "max_schedule_horizon_ms", "max_enqueue_batch", "max_reserve_batch", "max_reserve_queues", "max_wait_timeout_ms", "max_lease_duration_ms", "strict_queues", "dead_letter_retention_enabled")
+    __slots__ = ("server_version", "supported_protocol_versions", "server_time", "restricts_encodings", "allowed_encodings", "max_payload_bytes", "max_custom_entries", "max_custom_total_bytes", "max_custom_key_bytes", "max_queue_name_bytes", "max_job_type_bytes", "max_idempotency_key_bytes", "max_schedule_horizon", "max_enqueue_batch", "max_reserve_batch", "max_reserve_queues", "max_wait_timeout", "max_lease_duration", "strict_queues", "dead_letter_retention_enabled")
     SERVER_VERSION_FIELD_NUMBER: _ClassVar[int]
     SUPPORTED_PROTOCOL_VERSIONS_FIELD_NUMBER: _ClassVar[int]
-    SERVER_TIME_MS_FIELD_NUMBER: _ClassVar[int]
+    SERVER_TIME_FIELD_NUMBER: _ClassVar[int]
     RESTRICTS_ENCODINGS_FIELD_NUMBER: _ClassVar[int]
     ALLOWED_ENCODINGS_FIELD_NUMBER: _ClassVar[int]
     MAX_PAYLOAD_BYTES_FIELD_NUMBER: _ClassVar[int]
@@ -423,17 +427,17 @@ class GetServerInfoResponse(_message.Message):
     MAX_QUEUE_NAME_BYTES_FIELD_NUMBER: _ClassVar[int]
     MAX_JOB_TYPE_BYTES_FIELD_NUMBER: _ClassVar[int]
     MAX_IDEMPOTENCY_KEY_BYTES_FIELD_NUMBER: _ClassVar[int]
-    MAX_SCHEDULE_HORIZON_MS_FIELD_NUMBER: _ClassVar[int]
+    MAX_SCHEDULE_HORIZON_FIELD_NUMBER: _ClassVar[int]
     MAX_ENQUEUE_BATCH_FIELD_NUMBER: _ClassVar[int]
     MAX_RESERVE_BATCH_FIELD_NUMBER: _ClassVar[int]
     MAX_RESERVE_QUEUES_FIELD_NUMBER: _ClassVar[int]
-    MAX_WAIT_TIMEOUT_MS_FIELD_NUMBER: _ClassVar[int]
-    MAX_LEASE_DURATION_MS_FIELD_NUMBER: _ClassVar[int]
+    MAX_WAIT_TIMEOUT_FIELD_NUMBER: _ClassVar[int]
+    MAX_LEASE_DURATION_FIELD_NUMBER: _ClassVar[int]
     STRICT_QUEUES_FIELD_NUMBER: _ClassVar[int]
     DEAD_LETTER_RETENTION_ENABLED_FIELD_NUMBER: _ClassVar[int]
     server_version: str
     supported_protocol_versions: _containers.RepeatedScalarFieldContainer[str]
-    server_time_ms: int
+    server_time: _timestamp_pb2.Timestamp
     restricts_encodings: bool
     allowed_encodings: _containers.RepeatedScalarFieldContainer[str]
     max_payload_bytes: int
@@ -443,12 +447,12 @@ class GetServerInfoResponse(_message.Message):
     max_queue_name_bytes: int
     max_job_type_bytes: int
     max_idempotency_key_bytes: int
-    max_schedule_horizon_ms: int
+    max_schedule_horizon: _duration_pb2.Duration
     max_enqueue_batch: int
     max_reserve_batch: int
     max_reserve_queues: int
-    max_wait_timeout_ms: int
-    max_lease_duration_ms: int
+    max_wait_timeout: _duration_pb2.Duration
+    max_lease_duration: _duration_pb2.Duration
     strict_queues: bool
     dead_letter_retention_enabled: bool
-    def __init__(self, server_version: _Optional[str] = ..., supported_protocol_versions: _Optional[_Iterable[str]] = ..., server_time_ms: _Optional[int] = ..., restricts_encodings: bool = ..., allowed_encodings: _Optional[_Iterable[str]] = ..., max_payload_bytes: _Optional[int] = ..., max_custom_entries: _Optional[int] = ..., max_custom_total_bytes: _Optional[int] = ..., max_custom_key_bytes: _Optional[int] = ..., max_queue_name_bytes: _Optional[int] = ..., max_job_type_bytes: _Optional[int] = ..., max_idempotency_key_bytes: _Optional[int] = ..., max_schedule_horizon_ms: _Optional[int] = ..., max_enqueue_batch: _Optional[int] = ..., max_reserve_batch: _Optional[int] = ..., max_reserve_queues: _Optional[int] = ..., max_wait_timeout_ms: _Optional[int] = ..., max_lease_duration_ms: _Optional[int] = ..., strict_queues: bool = ..., dead_letter_retention_enabled: bool = ...) -> None: ...
+    def __init__(self, server_version: _Optional[str] = ..., supported_protocol_versions: _Optional[_Iterable[str]] = ..., server_time: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ..., restricts_encodings: bool = ..., allowed_encodings: _Optional[_Iterable[str]] = ..., max_payload_bytes: _Optional[int] = ..., max_custom_entries: _Optional[int] = ..., max_custom_total_bytes: _Optional[int] = ..., max_custom_key_bytes: _Optional[int] = ..., max_queue_name_bytes: _Optional[int] = ..., max_job_type_bytes: _Optional[int] = ..., max_idempotency_key_bytes: _Optional[int] = ..., max_schedule_horizon: _Optional[_Union[datetime.timedelta, _duration_pb2.Duration, _Mapping]] = ..., max_enqueue_batch: _Optional[int] = ..., max_reserve_batch: _Optional[int] = ..., max_reserve_queues: _Optional[int] = ..., max_wait_timeout: _Optional[_Union[datetime.timedelta, _duration_pb2.Duration, _Mapping]] = ..., max_lease_duration: _Optional[_Union[datetime.timedelta, _duration_pb2.Duration, _Mapping]] = ..., strict_queues: bool = ..., dead_letter_retention_enabled: bool = ...) -> None: ...

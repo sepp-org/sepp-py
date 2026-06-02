@@ -239,7 +239,3 @@ uv run ruff check . && uv run mypy
 The wire contract is vendored under [`proto/queue.proto`](proto/queue.proto) and
 the generated stubs are committed under `src/sepp/_pb/`, so installing the
 package needs no `protoc`. See the proto file's header for provenance.
-
-## License
-
-MIT

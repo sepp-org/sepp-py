@@ -9,6 +9,8 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING
 
+from google.protobuf.timestamp_pb2 import Timestamp as _Timestamp
+
 from sepp import errors
 from sepp._pb import queue_pb2 as pb
 from sepp.types import (
@@ -65,6 +67,21 @@ def now_millis() -> int:
     return datetime_to_millis(datetime.now(timezone.utc))
 
 
+def timestamp_to_datetime(ts: _Timestamp) -> datetime | None:
+    """A UTC datetime for a ``google.protobuf.Timestamp``, or ``None`` if it is
+    pre-epoch or not representable.
+
+    Mirrors the old ``millis_to_datetime`` semantics: pre-epoch instants (which
+    the int64-ms wire format expressed as a negative value) are rejected, as are
+    values outside the range a :class:`datetime.datetime` can hold."""
+    if ts.seconds < 0 or ts.nanos < 0:
+        return None
+    try:
+        return ts.ToDatetime(tzinfo=timezone.utc)
+    except (ValueError, OverflowError, OSError):
+        return None
+
+
 def primitive_to_pb(value: Primitive) -> pb.PrimitiveValue:
     pv = pb.PrimitiveValue()
     # bool is a subclass of int, so it must be checked first.
@@ -85,6 +102,7 @@ def primitive_from_pb(pv: pb.PrimitiveValue) -> Primitive | None:
     which = pv.WhichOneof("value")
     if which is None:
         return None
+
     value: Primitive = getattr(pv, which)
     return value
 
@@ -99,8 +117,10 @@ def payload_from_pb(p: pb.Payload) -> Payload:
 
 def trace_context_to_pb(tc: TraceContext) -> pb.TraceContext:
     m = pb.TraceContext(traceparent=tc.traceparent)
+
     if tc.tracestate is not None:
         m.tracestate = tc.tracestate
+
     return m
 
 
@@ -108,6 +128,7 @@ def trace_context_from_pb(m: pb.TraceContext) -> TraceContext | None:
     # An invalid trace context must not block job delivery: drop it and lose
     # trace continuity rather than failing the whole reservation.
     tracestate = m.tracestate if m.HasField("tracestate") else None
+
     try:
         return TraceContext(m.traceparent, tracestate)
     except ValueError:
@@ -116,6 +137,7 @@ def trace_context_from_pb(m: pb.TraceContext) -> TraceContext | None:
 
 def enqueue_request_to_pb(req: EnqueueRequest) -> pb.EnqueueRequest:
     m = pb.EnqueueRequest(queue=req.queue, job_type=req.job_type)
+
     if req.payload is not None:
         m.payload.CopyFrom(payload_to_pb(req.payload))
     if req.idempotency_key is not None:
@@ -129,10 +151,10 @@ def enqueue_request_to_pb(req: EnqueueRequest) -> pb.EnqueueRequest:
     for key, value in req.custom.items():
         m.custom[key].CopyFrom(primitive_to_pb(value))
     if req.scheduled_at is not None:
-        ms = datetime_to_millis(req.scheduled_at)
-        # Pre-epoch schedules are dropped rather than sent as negative.
-        if ms >= 0:
-            m.scheduled_at = ms
+        # Pre-epoch schedules are dropped rather than sent as a negative instant.
+        if datetime_to_millis(req.scheduled_at) >= 0:
+            m.scheduled_at.FromDatetime(req.scheduled_at)
+
     return m
 
 
@@ -142,6 +164,7 @@ def enqueue_ack_from_pb(r: pb.EnqueueResponse) -> EnqueueAck:
 
 def job_rejection_from_pb(r: pb.JobRejection) -> errors.JobRejection:
     which = r.WhichOneof("reason")
+
     if which is None:
         return errors.UnknownRejection()
     x = getattr(r, which)
@@ -166,9 +189,13 @@ def job_rejection_from_pb(r: pb.JobRejection) -> errors.JobRejection:
     if which == "idempotency_key_too_long":
         return errors.IdempotencyKeyTooLong(limit=x.limit, actual=x.actual)
     if which == "scheduled_too_far":
-        return errors.ScheduledTooFar(horizon_ms=x.horizon_ms, actual_ms=x.actual_ms)
+        return errors.ScheduledTooFar(
+            horizon=x.horizon.ToTimedelta(),
+            actual=x.actual.ToDatetime(tzinfo=timezone.utc),
+        )
     if which == "invalid_request":
         return errors.InvalidRequest(detail=x.message)
+
     return errors.UnknownRejection()
 
 
@@ -176,30 +203,33 @@ def job_validation_error_from_pb(e: pb.JobValidationError) -> errors.JobValidati
     rejection = (
         job_rejection_from_pb(e.rejection) if e.HasField("rejection") else errors.UnknownRejection()
     )
+
     return errors.JobValidationError(index=e.index, rejection=rejection)
 
 
 def reserve_options_to_pb(opts: ReserveOptions) -> pb.ReserveRequest:
-    m = pb.ReserveRequest(
-        queues=list(opts.queues),
-        wait_timeout_ms=timedelta_to_millis(opts.wait_timeout),
-        lease_duration_ms=timedelta_to_millis(opts.lease_duration),
-    )
+    m = pb.ReserveRequest(queues=list(opts.queues))
+    m.wait_timeout.FromTimedelta(opts.wait_timeout)
+    m.lease_duration.FromTimedelta(opts.lease_duration)
+
     if opts.worker_id is not None:
         m.worker_id = opts.worker_id
     if opts.max_jobs is not None:
         m.max_jobs = opts.max_jobs
+
     return m
 
 
 def server_info_from_pb(r: pb.GetServerInfoResponse) -> ServerInfo:
     if not r.server_version:
         raise errors.ServerInfoError("server info is missing required field `server_version`")
-    server_time = millis_to_datetime(r.server_time_ms)
+
+    server_time = timestamp_to_datetime(r.server_time)
     if server_time is None:
         raise errors.ServerInfoError(
-            f"server_time_ms is not a representable time ({r.server_time_ms}ms)"
+            f"server_time is not a representable time ({r.server_time.ToJsonString()})"
         )
+
     return ServerInfo(
         version=r.server_version,
         supported_protocol_versions=list(r.supported_protocol_versions),
@@ -213,12 +243,12 @@ def server_info_from_pb(r: pb.GetServerInfoResponse) -> ServerInfo:
         max_queue_name_bytes=r.max_queue_name_bytes,
         max_job_type_bytes=r.max_job_type_bytes,
         max_idempotency_key_bytes=r.max_idempotency_key_bytes,
-        max_schedule_horizon_ms=r.max_schedule_horizon_ms,
+        max_schedule_horizon=r.max_schedule_horizon.ToTimedelta(),
         max_enqueue_batch=r.max_enqueue_batch,
         max_reserve_batch=r.max_reserve_batch,
         max_reserve_queues=r.max_reserve_queues,
-        max_wait_timeout_ms=r.max_wait_timeout_ms,
-        max_lease_duration_ms=r.max_lease_duration_ms,
+        max_wait_timeout=r.max_wait_timeout.ToTimedelta(),
+        max_lease_duration=r.max_lease_duration.ToTimedelta(),
         strict_queues=r.strict_queues,
         dead_letter_retention_enabled=r.dead_letter_retention_enabled,
     )
@@ -239,15 +269,17 @@ def job_from_pb(client: SeppClient, j: pb.Job, worker_id: str | None) -> Job:
             f"job priority {j.priority} is out of range (expected 0-9)"
         ) from exc
 
-    enqueued_at = millis_to_datetime(j.enqueued_at)
+    enqueued_at = timestamp_to_datetime(j.enqueued_at)
     if enqueued_at is None:
         raise errors.JobConversionError(
-            f"job timestamp `enqueued_at` is not a representable time ({j.enqueued_at}ms)"
+            "job timestamp `enqueued_at` is not a representable time "
+            f"({j.enqueued_at.ToJsonString()})"
         )
-    lease_expires_at = millis_to_datetime(j.lease_expires_at)
+    lease_expires_at = timestamp_to_datetime(j.lease_expires_at)
     if lease_expires_at is None:
         raise errors.JobConversionError(
-            f"job timestamp `lease_expires_at` is not a representable time ({j.lease_expires_at}ms)"
+            "job timestamp `lease_expires_at` is not a representable time "
+            f"({j.lease_expires_at.ToJsonString()})"
         )
 
     custom: dict[str, Primitive] = {}
@@ -274,6 +306,7 @@ def job_from_pb(client: SeppClient, j: pb.Job, worker_id: str | None) -> Job:
         lease_expires_at=lease_expires_at,
         _lease=lease,
     )
+
     return Job(payload=payload, ctx=ctx)
 
 
@@ -287,6 +320,7 @@ _CAUSE_FROM_PB = {
 def dead_letter_record_from_pb(r: pb.DeadLetterRecord) -> DeadLetterRecord:
     if not r.HasField("job"):
         raise errors.JobConversionError("dead-letter record is missing required field `job`")
+
     j = r.job
     if not j.id:
         raise errors.JobConversionError("job is missing required field `id`")
@@ -300,15 +334,17 @@ def dead_letter_record_from_pb(r: pb.DeadLetterRecord) -> DeadLetterRecord:
             f"job priority {j.priority} is out of range (expected 0-9)"
         ) from exc
 
-    enqueued_at = millis_to_datetime(j.enqueued_at)
+    enqueued_at = timestamp_to_datetime(j.enqueued_at)
     if enqueued_at is None:
         raise errors.JobConversionError(
-            f"job timestamp `enqueued_at` is not a representable time ({j.enqueued_at}ms)"
+            "job timestamp `enqueued_at` is not a representable time "
+            f"({j.enqueued_at.ToJsonString()})"
         )
-    failed_at = millis_to_datetime(r.failed_at)
+    failed_at = timestamp_to_datetime(r.failed_at)
     if failed_at is None:
         raise errors.JobConversionError(
-            f"dead-letter timestamp `failed_at` is not a representable time ({r.failed_at}ms)"
+            "dead-letter timestamp `failed_at` is not a representable time "
+            f"({r.failed_at.ToJsonString()})"
         )
 
     custom: dict[str, Primitive] = {}
