@@ -45,6 +45,7 @@ _T = TypeVar("_T")
 # deadline never fires before the server's own wait window elapses.
 _RESERVE_DEADLINE_SLACK = timedelta(seconds=10)
 _DEFAULT_CONNECT_TIMEOUT = timedelta(seconds=5)
+_DEFAULT_RPC_TIMEOUT = timedelta(seconds=30)
 
 try:
     from importlib.metadata import PackageNotFoundError, version
@@ -176,11 +177,13 @@ class SeppClient:
         channel: grpc.aio.Channel,
         retry_policy: RetryPolicy | None = None,
         auth_metadata: Iterable[tuple[str, str]] | None = None,
+        rpc_timeout: timedelta = _DEFAULT_RPC_TIMEOUT,
     ) -> None:
         self._channel = channel
         self._stub = pb_grpc.QueueServiceStub(channel)
         self._retry_policy = retry_policy or RetryPolicy()
         self._auth_metadata: list[tuple[str, str]] = list(auth_metadata or [])
+        self._rpc_timeout = rpc_timeout.total_seconds()
 
     @classmethod
     async def connect(
@@ -194,6 +197,8 @@ class SeppClient:
         tls_domain: str | None = None,
         credentials: grpc.ChannelCredentials | None = None,
         connect_timeout: timedelta = _DEFAULT_CONNECT_TIMEOUT,
+        rpc_timeout: timedelta = _DEFAULT_RPC_TIMEOUT,
+        max_receive_message_bytes: int | None = None,
     ) -> SeppClient:
         """Connect to a sepp server and wait until the channel is ready.
 
@@ -203,6 +208,18 @@ class SeppClient:
         ``tls=True`` (system roots), ``tls_ca_cert`` (a PEM bundle for a private
         CA), ``tls_domain`` (override the verified name), or a full
         ``credentials`` object.
+
+        ``rpc_timeout`` is the deadline applied to every unary RPC except
+        :meth:`reserve`, whose deadline follows its options' ``wait_timeout``.
+        Very large enqueue batches may need a higher value.
+
+        ``max_receive_message_bytes`` raises gRPC's 4 MiB cap on a single
+        received message (``grpc.max_receive_message_length``); when ``None``
+        the gRPC default applies. Workers should size it for the largest
+        possible reserve response, up to the server's ``max_reserve_batch``
+        times ``max_payload_bytes``: an oversized response fails client-side
+        after the server has already leased the jobs, stranding them until
+        their leases expire.
 
         Raises :class:`~sepp.errors.ConnectError` if the connection is not ready
         within ``connect_timeout``, or :class:`~sepp.errors.InvalidApiKeyError`
@@ -222,6 +239,8 @@ class SeppClient:
         options = list(_CHANNEL_OPTIONS)
         if tls_domain is not None:
             options.append(("grpc.ssl_target_name_override", tls_domain))
+        if max_receive_message_bytes is not None:
+            options.append(("grpc.max_receive_message_length", max_receive_message_bytes))
 
         if credentials is not None:
             channel = grpc.aio.secure_channel(target, credentials, options=options)
@@ -245,15 +264,25 @@ class SeppClient:
             use_tls or credentials is not None,
             bool(auth_metadata),
         )
-        return cls(channel, retry_policy=retry_policy, auth_metadata=auth_metadata)
+        return cls(
+            channel,
+            retry_policy=retry_policy,
+            auth_metadata=auth_metadata,
+            rpc_timeout=rpc_timeout,
+        )
 
     @classmethod
     def from_channel(
-        cls, channel: grpc.aio.Channel, *, retry_policy: RetryPolicy | None = None
+        cls,
+        channel: grpc.aio.Channel,
+        *,
+        retry_policy: RetryPolicy | None = None,
+        rpc_timeout: timedelta = _DEFAULT_RPC_TIMEOUT,
     ) -> SeppClient:
         """Wrap an already-established ``grpc.aio`` channel, with no auth and the
-        given (or default) :class:`RetryPolicy`."""
-        return cls(channel, retry_policy=retry_policy)
+        given (or default) :class:`RetryPolicy` and ``rpc_timeout`` (see
+        :meth:`connect`)."""
+        return cls(channel, retry_policy=retry_policy, rpc_timeout=rpc_timeout)
 
     async def close(self) -> None:
         """Close the underlying channel."""
@@ -288,7 +317,9 @@ class SeppClient:
             try:
                 resp = await self._with_retry(
                     "enqueue_batch",
-                    lambda: self._stub.EnqueueBatch(req, metadata=self._call_metadata()),
+                    lambda: self._stub.EnqueueBatch(
+                        req, timeout=self._rpc_timeout, metadata=self._call_metadata()
+                    ),
                 )
             except grpc.aio.AioRpcError as err:
                 raise errors.client_error_from_rpc(err) from err
@@ -336,7 +367,9 @@ class SeppClient:
             try:
                 resp = await self._with_retry(
                     "enqueue_atomic",
-                    lambda: self._stub.EnqueueAtomic(req, metadata=self._call_metadata()),
+                    lambda: self._stub.EnqueueAtomic(
+                        req, timeout=self._rpc_timeout, metadata=self._call_metadata()
+                    ),
                 )
             except grpc.aio.AioRpcError as err:
                 raise errors.client_error_from_rpc(err) from err
@@ -402,7 +435,10 @@ class SeppClient:
         with _otel.client_span("sepp.ack"):
             try:
                 await self._with_retry(
-                    "ack", lambda: self._stub.Ack(req, metadata=self._call_metadata())
+                    "ack",
+                    lambda: self._stub.Ack(
+                        req, timeout=self._rpc_timeout, metadata=self._call_metadata()
+                    ),
                 )
             except grpc.aio.AioRpcError as err:
                 raise errors.lease_error_from_rpc(err) from err
@@ -439,7 +475,10 @@ class SeppClient:
         with _otel.client_span("sepp.nack"):
             try:
                 resp = await self._with_retry(
-                    "nack", lambda: self._stub.Nack(req, metadata=self._call_metadata())
+                    "nack",
+                    lambda: self._stub.Nack(
+                        req, timeout=self._rpc_timeout, metadata=self._call_metadata()
+                    ),
                 )
             except grpc.aio.AioRpcError as err:
                 raise errors.lease_error_from_rpc(err) from err
@@ -463,7 +502,10 @@ class SeppClient:
         with _otel.client_span("sepp.extend"):
             try:
                 resp = await self._with_retry(
-                    "extend", lambda: self._stub.Extend(req, metadata=self._call_metadata())
+                    "extend",
+                    lambda: self._stub.Extend(
+                        req, timeout=self._rpc_timeout, metadata=self._call_metadata()
+                    ),
                 )
             except grpc.aio.AioRpcError as err:
                 raise errors.lease_error_from_rpc(err) from err
@@ -481,7 +523,9 @@ class SeppClient:
                 resp = await self._with_retry(
                     "get_server_info",
                     lambda: self._stub.GetServerInfo(
-                        pb.GetServerInfoRequest(), metadata=self._call_metadata()
+                        pb.GetServerInfoRequest(),
+                        timeout=self._rpc_timeout,
+                        metadata=self._call_metadata(),
                     ),
                 )
             except grpc.aio.AioRpcError as err:
@@ -516,7 +560,9 @@ class SeppClient:
 
         with _otel.client_span("sepp.drain_dead_letters"):
             try:
-                resp = await self._stub.DrainDeadLetters(req, metadata=self._call_metadata())
+                resp = await self._stub.DrainDeadLetters(
+                    req, timeout=self._rpc_timeout, metadata=self._call_metadata()
+                )
             except grpc.aio.AioRpcError as err:
                 raise errors.client_error_from_rpc(err) from err
 

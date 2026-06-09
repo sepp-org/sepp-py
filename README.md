@@ -196,7 +196,8 @@ client = await SeppClient.connect(
 ```
 
 `connect` also accepts `tls=True` (system roots), `tls_domain=...` (override the
-verified name), a full `credentials=...` object, and a `retry_policy=...`.
+verified name), a full `credentials=...` object, a `retry_policy=...`, and the
+timeout and message-size options below.
 
 ## Retries
 
@@ -219,6 +220,26 @@ client = await SeppClient.connect(
 ```
 
 `reserve` is a long poll and is never retried by this policy.
+
+## Timeouts and message size
+
+Every unary RPC except `reserve` carries a deadline, 30 seconds by default;
+tune it with `rpc_timeout=` on `connect` (very large enqueue batches may need
+more). `reserve` instead derives its deadline from its options' `wait_timeout`.
+
+Workers reserving many or large payloads should also raise
+`max_receive_message_bytes=`, which lifts gRPC's 4 MiB cap on a single received
+message: a reserve response can be up to the server's `max_reserve_batch` times
+`max_payload_bytes`, and a response over the cap fails on the client after the
+server has already leased the jobs, stranding them until their leases expire.
+
+```python
+client = await SeppClient.connect(
+    "127.0.0.1:50051",
+    rpc_timeout=timedelta(seconds=60),
+    max_receive_message_bytes=32 * 1024 * 1024,
+)
+```
 
 ## OpenTelemetry
 

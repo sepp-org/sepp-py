@@ -352,6 +352,113 @@ async def test_default_policy_does_not_retry() -> None:
     assert stub.Ack.calls == 1  # type: ignore[attr-defined]
 
 
+# -- deadlines & connect options ---------------------------------------------
+
+
+async def test_unary_rpcs_carry_default_deadline() -> None:
+    stub = FakeStub()
+    stub.EnqueueBatch = FakeUnaryUnary(_batch_response(_success()))
+    stub.EnqueueAtomic = FakeUnaryUnary(
+        pb.EnqueueAtomicResponse(
+            success=pb.EnqueueAtomicSuccess(responses=[pb.EnqueueResponse(job_id="a")])
+        )
+    )
+    stub.Ack = FakeUnaryUnary(pb.AckResponse(job_id=VALID_UUID))
+    stub.Nack = FakeUnaryUnary(pb.NackResponse(job_id=VALID_UUID))
+    stub.Extend = FakeUnaryUnary(
+        pb.ExtendResponse(
+            job_id=VALID_UUID,
+            lease_expires_at=datetime(1970, 1, 1, tzinfo=timezone.utc)
+            + timedelta(milliseconds=1_700_000_120_000),
+        )
+    )
+    stub.GetServerInfo = FakeUnaryUnary(
+        pb.GetServerInfoResponse(
+            server_version="1.0.0",
+            supported_protocol_versions=["v1"],
+            server_time=datetime(1970, 1, 1, tzinfo=timezone.utc) + timedelta(milliseconds=1),
+        )
+    )
+    stub.DrainDeadLetters = FakeUnaryUnary(pb.DrainDeadLettersResponse())
+    client = make_client(stub)
+
+    await client.enqueue(EnqueueRequest("q", "t"))
+    await client.enqueue_atomic([EnqueueRequest("q", "t")])
+    ctx = _ctx(client)
+    await client.ack(ctx)
+    await client.nack(ctx)
+    await client.extend(ctx, timedelta(seconds=60))
+    await client.get_server_info()
+    await client.drain_dead_letters()
+
+    for name in (
+        "EnqueueBatch",
+        "EnqueueAtomic",
+        "Ack",
+        "Nack",
+        "Extend",
+        "GetServerInfo",
+        "DrainDeadLetters",
+    ):
+        assert getattr(stub, name).last_timeout == 30.0, name
+
+
+async def test_reserve_deadline_tracks_wait_timeout() -> None:
+    stub = FakeStub()
+    stub.Reserve = FakeUnaryUnary(pb.ReserveResponse())
+    client = make_client(stub)
+    opts = ReserveOptions(["q"], timedelta(seconds=1), wait_timeout=timedelta(seconds=2))
+    await client.reserve(opts)
+    assert stub.Reserve.last_timeout == 12.0  # type: ignore[attr-defined]  # wait + 10s slack
+
+
+class _FakeChannel:
+    def unary_unary(self, *args: object, **kwargs: object) -> FakeUnaryUnary:
+        return FakeUnaryUnary()
+
+    async def channel_ready(self) -> None:
+        return None
+
+    async def close(self) -> None:
+        return None
+
+
+async def test_from_channel_accepts_rpc_timeout() -> None:
+    client = SeppClient.from_channel(
+        _FakeChannel(),  # type: ignore[arg-type]
+        rpc_timeout=timedelta(seconds=7),
+    )
+    assert client._rpc_timeout == 7.0
+
+
+async def test_connect_sets_max_receive_message_bytes(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict[str, list[tuple[str, object]]] = {}
+
+    def fake_insecure_channel(target: str, options: list[tuple[str, object]]) -> _FakeChannel:
+        captured["options"] = options
+        return _FakeChannel()
+
+    monkeypatch.setattr(grpc.aio, "insecure_channel", fake_insecure_channel)
+    client = await SeppClient.connect(
+        "127.0.0.1:1", rpc_timeout=timedelta(seconds=5), max_receive_message_bytes=32 << 20
+    )
+    assert ("grpc.max_receive_message_length", 32 << 20) in captured["options"]
+    assert client._rpc_timeout == 5.0
+
+
+async def test_connect_defaults_keep_grpc_message_cap(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict[str, list[tuple[str, object]]] = {}
+
+    def fake_insecure_channel(target: str, options: list[tuple[str, object]]) -> _FakeChannel:
+        captured["options"] = options
+        return _FakeChannel()
+
+    monkeypatch.setattr(grpc.aio, "insecure_channel", fake_insecure_channel)
+    client = await SeppClient.connect("127.0.0.1:1")
+    assert "grpc.max_receive_message_length" not in [k for k, _ in captured["options"]]
+    assert client._rpc_timeout == 30.0
+
+
 # -- helpers ----------------------------------------------------------------
 
 

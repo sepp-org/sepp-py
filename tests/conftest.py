@@ -7,7 +7,7 @@ from collections.abc import Awaitable, Callable
 import grpc
 import grpc.aio
 
-from sepp.client import RetryPolicy, SeppClient
+from sepp.client import _DEFAULT_RPC_TIMEOUT, RetryPolicy, SeppClient
 
 VALID_TP = "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01"
 VALID_UUID = "550e8400-e29b-41d4-a716-446655440000"
@@ -38,6 +38,7 @@ class FakeUnaryUnary:
         self.calls = 0
         self.last_request: object = None
         self.last_metadata: object = None
+        self.last_timeout: object = None
 
     def __call__(
         self, request: object, metadata: object = None, timeout: object = None
@@ -45,6 +46,7 @@ class FakeUnaryUnary:
         self.calls += 1
         self.last_request = request
         self.last_metadata = metadata
+        self.last_timeout = timeout
 
         async def _run() -> object:
             if self.sequence is not None:
@@ -70,6 +72,7 @@ class FakeStub:
         self.Nack: Callable[..., Awaitable[object]] = FakeUnaryUnary()
         self.Extend: Callable[..., Awaitable[object]] = FakeUnaryUnary()
         self.GetServerInfo: Callable[..., Awaitable[object]] = FakeUnaryUnary()
+        self.DrainDeadLetters: Callable[..., Awaitable[object]] = FakeUnaryUnary()
 
 
 def make_client(stub: FakeStub, retry_policy: RetryPolicy | None = None) -> SeppClient:
@@ -79,4 +82,5 @@ def make_client(stub: FakeStub, retry_policy: RetryPolicy | None = None) -> Sepp
     client._stub = stub  # type: ignore[assignment]
     client._retry_policy = retry_policy or RetryPolicy()
     client._auth_metadata = []
+    client._rpc_timeout = _DEFAULT_RPC_TIMEOUT.total_seconds()
     return client

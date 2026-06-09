@@ -426,6 +426,13 @@ class Worker:
                     ctx, RetryDirective.DEFAULT, f"handler raised: {error}"
                 )
                 self._metrics.record_nacked(dead_lettered)
+        except errors.JobNotFoundError as err:
+            logger.error(
+                "ack/nack returned JobNotFound: either the lease was lost and the job will be"
+                " redelivered, or an earlier attempt of this call succeeded and only the"
+                " response was lost: %s",
+                err,
+            )
         except errors.SeppError as err:
             logger.error(
                 "failed to ack/nack job; it will be redelivered after lease expiry: %s", err
