@@ -3,9 +3,7 @@
 #
 # The proto contract is vendored under proto/sepp/v1/queue.proto. It is NOT the source
 # of truth — see the header comment in that file for provenance and how to
-# refresh the snapshot. The vendored copy has the canonical `buf.validate`
-# annotations stripped, so codegen depends only on the well-known types and
-# produces a self-contained module (no buf/validate dependency).
+# refresh the snapshot.
 #
 # The generated stubs are committed so installing the package needs no protoc.
 # protoc emits a flat `import queue_pb2`; we rewrite it to live under

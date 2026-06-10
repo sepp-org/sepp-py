@@ -26,26 +26,13 @@ if _version_not_supported:
 
 
 class QueueServiceStub(object):
-    """NOTE ON PROVENANCE
-    ------------------
-    This is the sepp wire contract, vendored for code generation. It is NOT the
-    source of truth: the contract lives in the sepp `proto` repo and is published
-    to buf.build/sepp-org/sepp-proto.
-
-    The canonical proto carries `buf.validate` field/oneof annotations that
-    describe *server-side* validation constraints (e.g. min_len, uuid, ranges).
-    The client never enforces them — validation is the server's job — so they are
-    stripped here. Dropping them lets protoc generate a self-contained module that
-    depends only on the well-known types, with no `buf/validate` dependency. The
-    wire format is unaffected: proto options never change field numbers, types, or
-    encoding. To refresh this snapshot, re-export the canonical proto and strip
-    the `import "buf/validate/validate.proto";` line plus every `[(buf.validate
-    .*)]` field option and `option (buf.validate.oneof).required` line.
-
-    ============================================================================
+    """============================================================================
     Service definitions
     ============================================================================
 
+    Authentication: when the server is configured with API keys, every RPC
+    requires an `authorization` metadata header of the form `Bearer <api key>`.
+    Requests with a missing or invalid key fail with UNAUTHENTICATED.
     """
 
     def __init__(self, channel):
@@ -97,26 +84,13 @@ class QueueServiceStub(object):
 
 
 class QueueServiceServicer(object):
-    """NOTE ON PROVENANCE
-    ------------------
-    This is the sepp wire contract, vendored for code generation. It is NOT the
-    source of truth: the contract lives in the sepp `proto` repo and is published
-    to buf.build/sepp-org/sepp-proto.
-
-    The canonical proto carries `buf.validate` field/oneof annotations that
-    describe *server-side* validation constraints (e.g. min_len, uuid, ranges).
-    The client never enforces them — validation is the server's job — so they are
-    stripped here. Dropping them lets protoc generate a self-contained module that
-    depends only on the well-known types, with no `buf/validate` dependency. The
-    wire format is unaffected: proto options never change field numbers, types, or
-    encoding. To refresh this snapshot, re-export the canonical proto and strip
-    the `import "buf/validate/validate.proto";` line plus every `[(buf.validate
-    .*)]` field option and `option (buf.validate.oneof).required` line.
-
-    ============================================================================
+    """============================================================================
     Service definitions
     ============================================================================
 
+    Authentication: when the server is configured with API keys, every RPC
+    requires an `authorization` metadata header of the form `Bearer <api key>`.
+    Requests with a missing or invalid key fail with UNAUTHENTICATED.
     """
 
     def EnqueueBatch(self, request, context):
@@ -127,7 +101,8 @@ class QueueServiceServicer(object):
         Whole-batch failures use gRPC status codes:
         INVALID_ARGUMENT  - batch shape is malformed (empty, exceeds max_enqueue_batch)
         UNAUTHENTICATED   - missing or invalid API key
-        INTERNAL          - server-side storage failure (transient; safe to retry)
+        INTERNAL          - server-side storage failure. Transient, but a retry
+        may duplicate jobs that carry no idempotency_key.
         """
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
@@ -142,7 +117,8 @@ class QueueServiceServicer(object):
         gRPC status codes:
         INVALID_ARGUMENT  - batch shape is malformed (empty, exceeds max_enqueue_batch)
         UNAUTHENTICATED   - missing or invalid API key
-        INTERNAL          - server-side storage failure (transient; safe to retry)
+        INTERNAL          - server-side storage failure. Transient, but a retry
+        may duplicate jobs that carry no idempotency_key.
         """
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
@@ -199,7 +175,7 @@ class QueueServiceServicer(object):
         a single queue) and REMOVES them from the server in the same transaction
         before responding. This is destructive and privileged: there is no
         redelivery token (unlike Reserve/Ack), so a dropped response permanently
-        loses exactly the returned batch.
+        removes the jobs.
 
         An empty list means nothing matched, which is indistinguishable from
         dead-letter retention being disabled — check dead_letter_retention_enabled
@@ -273,26 +249,13 @@ def add_QueueServiceServicer_to_server(servicer, server):
 
  # This class is part of an EXPERIMENTAL API.
 class QueueService(object):
-    """NOTE ON PROVENANCE
-    ------------------
-    This is the sepp wire contract, vendored for code generation. It is NOT the
-    source of truth: the contract lives in the sepp `proto` repo and is published
-    to buf.build/sepp-org/sepp-proto.
-
-    The canonical proto carries `buf.validate` field/oneof annotations that
-    describe *server-side* validation constraints (e.g. min_len, uuid, ranges).
-    The client never enforces them — validation is the server's job — so they are
-    stripped here. Dropping them lets protoc generate a self-contained module that
-    depends only on the well-known types, with no `buf/validate` dependency. The
-    wire format is unaffected: proto options never change field numbers, types, or
-    encoding. To refresh this snapshot, re-export the canonical proto and strip
-    the `import "buf/validate/validate.proto";` line plus every `[(buf.validate
-    .*)]` field option and `option (buf.validate.oneof).required` line.
-
-    ============================================================================
+    """============================================================================
     Service definitions
     ============================================================================
 
+    Authentication: when the server is configured with API keys, every RPC
+    requires an `authorization` metadata header of the form `Bearer <api key>`.
+    Requests with a missing or invalid key fail with UNAUTHENTICATED.
     """
 
     @staticmethod

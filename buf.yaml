@@ -5,16 +5,10 @@
 #
 # buf is not part of the build — `grpc_tools.protoc` compiles the vendored file
 # directly (see scripts/gen_proto.sh), and the generated stubs are committed
-# under src/sepp/_pb/, so installing the package needs no protoc or buf.
-#
-# The vendored copy has the canonical `buf.validate` annotations stripped: the
-# client never enforces them (validation is server-side), so dropping them lets
-# codegen produce a self-contained module with no buf/validate dependency. This
+# under src/sepp/_pb/, so installing the package needs no protoc or buf. This
 # file exists only to document provenance and how to refresh the snapshot:
 #
-#     buf export buf.build/sepp-org/sepp-proto:v1.1.0 -o proto
-#     # then strip the `import "buf/validate/validate.proto";` line and every
-#     # `[(buf.validate.*)]` field option / `option (buf.validate.oneof)` line.
+#     buf export buf.build/sepp-org/sepp-proto:v1.1.2 -o proto
 version: v2
 modules:
   - path: proto

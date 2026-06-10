@@ -52,6 +52,7 @@ __all__ = [
     "IdempotencyKeyTooLong",
     "ScheduledTooFar",
     "InvalidRequest",
+    "QueueFull",
     "UnknownRejection",
     "JobValidationError",
     "JobRejectedError",
@@ -184,11 +185,12 @@ class ServerInfoError(SeppError):
 class JobRejection:
     """Why the server refused a single job.
 
-    Every variant is *deterministic*: re-sending the same job against the same
-    server state produces the same rejection. Transient problems surface as a
-    :class:`ClientError` instead. Most limits behind these variants are
-    advertised up front by :class:`~sepp.types.ServerInfo`, so a producer can
-    validate locally before sending.
+    Every variant except :class:`QueueFull` is *deterministic*: re-sending the
+    same job against the same server configuration produces the same rejection.
+    Transient problems surface as a :class:`ClientError` instead. Most limits
+    behind these variants are advertised up front by
+    :class:`~sepp.types.ServerInfo`, so a producer can validate locally before
+    sending.
 
     This is a value returned by :meth:`~sepp.client.SeppClient.enqueue_batch`,
     not an exception. Pattern-match on the concrete subclass (e.g.
@@ -355,6 +357,19 @@ class InvalidRequest(JobRejection):
     @property
     def message(self) -> str:
         return f"structural validation failed: {self.detail}"
+
+
+@dataclass(frozen=True)
+class QueueFull(JobRejection):
+    """The target queue is at its ``max_queue_depth``. The only
+    non-deterministic rejection: it clears once the queue drains."""
+
+    queue: str
+    limit: int
+
+    @property
+    def message(self) -> str:
+        return f"queue {self.queue!r} is full (max depth {self.limit})"
 
 
 @dataclass(frozen=True)

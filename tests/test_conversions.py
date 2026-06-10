@@ -216,6 +216,11 @@ def test_job_rejection_invalid_request() -> None:
     assert isinstance(r, errors.InvalidRequest) and r.detail == "oops"
 
 
+def test_job_rejection_queue_full() -> None:
+    r = _convert.job_rejection_from_pb(_rej(queue_full=pb.QueueFull(queue="q", limit=1000)))
+    assert isinstance(r, errors.QueueFull) and r.queue == "q" and r.limit == 1000
+
+
 def test_job_rejection_none_is_unknown() -> None:
     r = _convert.job_rejection_from_pb(pb.JobRejection())
     assert isinstance(r, errors.UnknownRejection)
@@ -236,6 +241,7 @@ def test_job_rejection_messages_render() -> None:
         errors.IdempotencyKeyTooLong(1, 2),
         errors.ScheduledTooFar(timedelta(minutes=1), datetime(2023, 1, 1, tzinfo=timezone.utc)),
         errors.InvalidRequest("m"),
+        errors.QueueFull("q", 1),
         errors.UnknownRejection(),
     ):
         assert str(r)
@@ -475,6 +481,13 @@ def test_dead_letter_record_lease_expired_has_no_reason() -> None:
     r = _convert.dead_letter_record_from_pb(msg)
     assert r.cause == DeadLetterCause.LEASE_EXPIRED
     assert r.last_reason is None
+
+
+def test_dead_letter_record_admin_cause() -> None:
+    msg = _valid_dead_letter()
+    msg.cause = pb.DeadLetterCause.DEAD_LETTER_CAUSE_ADMIN
+    r = _convert.dead_letter_record_from_pb(msg)
+    assert r.cause == DeadLetterCause.ADMIN
 
 
 def test_dead_letter_record_unknown_cause_is_unspecified() -> None:

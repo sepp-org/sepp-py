@@ -352,7 +352,7 @@ class ServerInfo:
 
 
 class DeadLetterCause(enum.Enum):
-    """Why a job was moved to the server's dead-letter store. Mirrors the three
+    """Why a job was moved to the server's dead-letter store. Mirrors the
     terminal paths a job can take."""
 
     UNSPECIFIED = "unspecified"
@@ -364,6 +364,8 @@ class DeadLetterCause(enum.Enum):
     remaining attempts."""
     LEASE_EXPIRED = "lease_expired"
     """The lease expired while the job was on its final attempt."""
+    ADMIN = "admin"
+    """An operator dead-lettered the job through the admin API."""
 
 
 @dataclass(frozen=True)

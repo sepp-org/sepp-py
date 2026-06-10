@@ -18,10 +18,12 @@ class DeadLetterCause(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     DEAD_LETTER_CAUSE_ATTEMPTS_EXHAUSTED: _ClassVar[DeadLetterCause]
     DEAD_LETTER_CAUSE_REJECTED: _ClassVar[DeadLetterCause]
     DEAD_LETTER_CAUSE_LEASE_EXPIRED: _ClassVar[DeadLetterCause]
+    DEAD_LETTER_CAUSE_ADMIN: _ClassVar[DeadLetterCause]
 DEAD_LETTER_CAUSE_UNSPECIFIED: DeadLetterCause
 DEAD_LETTER_CAUSE_ATTEMPTS_EXHAUSTED: DeadLetterCause
 DEAD_LETTER_CAUSE_REJECTED: DeadLetterCause
 DEAD_LETTER_CAUSE_LEASE_EXPIRED: DeadLetterCause
+DEAD_LETTER_CAUSE_ADMIN: DeadLetterCause
 
 class PrimitiveValue(_message.Message):
     __slots__ = ("string_value", "double_value", "int_value", "bool_value")
@@ -87,7 +89,7 @@ class Job(_message.Message):
     def __init__(self, id: _Optional[str] = ..., job_type: _Optional[str] = ..., payload: _Optional[_Union[Payload, _Mapping]] = ..., priority: _Optional[int] = ..., trace_context: _Optional[_Union[TraceContext, _Mapping]] = ..., enqueued_at: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ..., attempt: _Optional[int] = ..., max_attempts: _Optional[int] = ..., lease_expires_at: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ..., custom: _Optional[_Mapping[str, PrimitiveValue]] = ..., scheduled_at: _Optional[_Union[datetime.datetime, _timestamp_pb2.Timestamp, _Mapping]] = ..., queue: _Optional[str] = ...) -> None: ...
 
 class JobRejection(_message.Message):
-    __slots__ = ("unknown_queue", "payload_too_large", "encoding_not_allowed", "job_type_not_allowed", "custom_entries_too_many", "custom_map_too_large", "custom_key_too_long", "queue_name_too_long", "job_type_name_too_long", "idempotency_key_too_long", "scheduled_too_far", "invalid_request")
+    __slots__ = ("unknown_queue", "payload_too_large", "encoding_not_allowed", "job_type_not_allowed", "custom_entries_too_many", "custom_map_too_large", "custom_key_too_long", "queue_name_too_long", "job_type_name_too_long", "idempotency_key_too_long", "scheduled_too_far", "invalid_request", "queue_full")
     UNKNOWN_QUEUE_FIELD_NUMBER: _ClassVar[int]
     PAYLOAD_TOO_LARGE_FIELD_NUMBER: _ClassVar[int]
     ENCODING_NOT_ALLOWED_FIELD_NUMBER: _ClassVar[int]
@@ -100,6 +102,7 @@ class JobRejection(_message.Message):
     IDEMPOTENCY_KEY_TOO_LONG_FIELD_NUMBER: _ClassVar[int]
     SCHEDULED_TOO_FAR_FIELD_NUMBER: _ClassVar[int]
     INVALID_REQUEST_FIELD_NUMBER: _ClassVar[int]
+    QUEUE_FULL_FIELD_NUMBER: _ClassVar[int]
     unknown_queue: UnknownQueue
     payload_too_large: PayloadTooLarge
     encoding_not_allowed: EncodingNotAllowed
@@ -112,7 +115,8 @@ class JobRejection(_message.Message):
     idempotency_key_too_long: IdempotencyKeyTooLong
     scheduled_too_far: ScheduledTooFar
     invalid_request: InvalidRequest
-    def __init__(self, unknown_queue: _Optional[_Union[UnknownQueue, _Mapping]] = ..., payload_too_large: _Optional[_Union[PayloadTooLarge, _Mapping]] = ..., encoding_not_allowed: _Optional[_Union[EncodingNotAllowed, _Mapping]] = ..., job_type_not_allowed: _Optional[_Union[JobTypeNotAllowed, _Mapping]] = ..., custom_entries_too_many: _Optional[_Union[CustomEntriesTooMany, _Mapping]] = ..., custom_map_too_large: _Optional[_Union[CustomMapTooLarge, _Mapping]] = ..., custom_key_too_long: _Optional[_Union[CustomKeyTooLong, _Mapping]] = ..., queue_name_too_long: _Optional[_Union[QueueNameTooLong, _Mapping]] = ..., job_type_name_too_long: _Optional[_Union[JobTypeNameTooLong, _Mapping]] = ..., idempotency_key_too_long: _Optional[_Union[IdempotencyKeyTooLong, _Mapping]] = ..., scheduled_too_far: _Optional[_Union[ScheduledTooFar, _Mapping]] = ..., invalid_request: _Optional[_Union[InvalidRequest, _Mapping]] = ...) -> None: ...
+    queue_full: QueueFull
+    def __init__(self, unknown_queue: _Optional[_Union[UnknownQueue, _Mapping]] = ..., payload_too_large: _Optional[_Union[PayloadTooLarge, _Mapping]] = ..., encoding_not_allowed: _Optional[_Union[EncodingNotAllowed, _Mapping]] = ..., job_type_not_allowed: _Optional[_Union[JobTypeNotAllowed, _Mapping]] = ..., custom_entries_too_many: _Optional[_Union[CustomEntriesTooMany, _Mapping]] = ..., custom_map_too_large: _Optional[_Union[CustomMapTooLarge, _Mapping]] = ..., custom_key_too_long: _Optional[_Union[CustomKeyTooLong, _Mapping]] = ..., queue_name_too_long: _Optional[_Union[QueueNameTooLong, _Mapping]] = ..., job_type_name_too_long: _Optional[_Union[JobTypeNameTooLong, _Mapping]] = ..., idempotency_key_too_long: _Optional[_Union[IdempotencyKeyTooLong, _Mapping]] = ..., scheduled_too_far: _Optional[_Union[ScheduledTooFar, _Mapping]] = ..., invalid_request: _Optional[_Union[InvalidRequest, _Mapping]] = ..., queue_full: _Optional[_Union[QueueFull, _Mapping]] = ...) -> None: ...
 
 class UnknownQueue(_message.Message):
     __slots__ = ("queue",)
@@ -207,6 +211,14 @@ class InvalidRequest(_message.Message):
     MESSAGE_FIELD_NUMBER: _ClassVar[int]
     message: str
     def __init__(self, message: _Optional[str] = ...) -> None: ...
+
+class QueueFull(_message.Message):
+    __slots__ = ("queue", "limit")
+    QUEUE_FIELD_NUMBER: _ClassVar[int]
+    LIMIT_FIELD_NUMBER: _ClassVar[int]
+    queue: str
+    limit: int
+    def __init__(self, queue: _Optional[str] = ..., limit: _Optional[int] = ...) -> None: ...
 
 class EnqueueRequest(_message.Message):
     __slots__ = ("queue", "job_type", "payload", "idempotency_key", "priority", "max_attempts", "trace_context", "custom", "scheduled_at")

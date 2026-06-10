@@ -1,3 +1,8 @@
+// Vendored snapshot of the sepp wire contract, used for code generation.
+// NOT the source of truth: the contract lives in the sepp `proto` repo and is
+// published to buf.build/sepp-org/sepp-proto. Refresh with:
+//   buf export buf.build/sepp-org/sepp-proto:v1.1.2 -o proto
+
 syntax = "proto3";
 
 package sepp.v1;
@@ -6,26 +11,13 @@ import "google/protobuf/duration.proto";
 import "google/protobuf/empty.proto";
 import "google/protobuf/timestamp.proto";
 
-// NOTE ON PROVENANCE
-// ------------------
-// This is the sepp wire contract, vendored for code generation. It is NOT the
-// source of truth: the contract lives in the sepp `proto` repo and is published
-// to buf.build/sepp-org/sepp-proto.
-//
-// The canonical proto carries `buf.validate` field/oneof annotations that
-// describe *server-side* validation constraints (e.g. min_len, uuid, ranges).
-// The client never enforces them — validation is the server's job — so they are
-// stripped here. Dropping them lets protoc generate a self-contained module that
-// depends only on the well-known types, with no `buf/validate` dependency. The
-// wire format is unaffected: proto options never change field numbers, types, or
-// encoding. To refresh this snapshot, re-export the canonical proto and strip
-// the `import "buf/validate/validate.proto";` line plus every `[(buf.validate
-// .*)]` field option and `option (buf.validate.oneof).required` line.
-
 // ============================================================================
 // Service definitions
 // ============================================================================
 
+// Authentication: when the server is configured with API keys, every RPC
+// requires an `authorization` metadata header of the form `Bearer <api key>`.
+// Requests with a missing or invalid key fail with UNAUTHENTICATED.
 service QueueService {
   // Best-effort batch enqueue. Accepts multiple jobs in one request and
   // returns an individual success or rejection per job. Use this for
@@ -34,7 +26,8 @@ service QueueService {
   // Whole-batch failures use gRPC status codes:
   //   INVALID_ARGUMENT  - batch shape is malformed (empty, exceeds max_enqueue_batch)
   //   UNAUTHENTICATED   - missing or invalid API key
-  //   INTERNAL          - server-side storage failure (transient; safe to retry)
+  //   INTERNAL          - server-side storage failure. Transient, but a retry
+  //                       may duplicate jobs that carry no idempotency_key.
   rpc EnqueueBatch(EnqueueBatchRequest) returns (EnqueueBatchResponse);
 
   // Atomic batch enqueue. Either every job is enqueued or none are.
@@ -45,7 +38,8 @@ service QueueService {
   // gRPC status codes:
   //   INVALID_ARGUMENT  - batch shape is malformed (empty, exceeds max_enqueue_batch)
   //   UNAUTHENTICATED   - missing or invalid API key
-  //   INTERNAL          - server-side storage failure (transient; safe to retry)
+  //   INTERNAL          - server-side storage failure. Transient, but a retry
+  //                       may duplicate jobs that carry no idempotency_key.
   rpc EnqueueAtomic(EnqueueBatchRequest) returns (EnqueueAtomicResponse);
 
   // Long-poll reserve. Returns zero or more jobs, or times out with an empty list.
@@ -82,7 +76,7 @@ service QueueService {
   // a single queue) and REMOVES them from the server in the same transaction
   // before responding. This is destructive and privileged: there is no
   // redelivery token (unlike Reserve/Ack), so a dropped response permanently
-  // loses exactly the returned batch.
+  // removes the jobs.
   //
   // An empty list means nothing matched, which is indistinguishable from
   // dead-letter retention being disabled — check dead_letter_retention_enabled
@@ -102,7 +96,8 @@ service QueueService {
 // Common types
 // ============================================================================
 
-// A JSON-primitive value, for use in the custom value map.
+// A JSON-primitive value, for use in the custom value map. Exactly one value
+// must be set.
 message PrimitiveValue {
   oneof value {
     string string_value = 1;
@@ -123,6 +118,7 @@ message TraceContext {
 
 // Carries payload bytes and the encoding hint.
 message Payload {
+  // Must be non-empty: omit the payload entirely for jobs that carry no data.
   bytes data = 1;
   string encoding = 2;
 }
@@ -145,7 +141,7 @@ message Job {
   // Trace context for tracing continuation.
   optional TraceContext trace_context = 5;
 
-  // Wall-clock time when the producer enqueued this job.
+  // Wall-clock time when the producer enqueued this job. Always set.
   google.protobuf.Timestamp enqueued_at = 6;
 
   // Which attempt at this job this delivery pertains to. 1 on first delivery, incremented on each redelivery.
@@ -154,11 +150,11 @@ message Job {
   // How many attempts are allowed before this job goes to dead-letter.
   uint32 max_attempts = 8;
 
-  // Wall-clock time when the lease on this job expires.
+  // Wall-clock time when the lease on this job expires. Always set.
   // If the worker has not acked/nacked/extended by this time, the job becomes available for redelivery.
   google.protobuf.Timestamp lease_expires_at = 9;
 
-  // Custom key-value pairs.
+  // Custom key-value pairs. Keys are non-empty.
   map<string, PrimitiveValue> custom = 10;
 
   // Schedule for future execution. If unset, the job is available immediately.
@@ -171,11 +167,16 @@ message Job {
   string queue = 12;
 }
 
-// Reason a single job in an enqueue batch was rejected. Every variant
-// represents a deterministic rejection: retrying the same job against the
-// same server state produces the same outcome. Transient failures (e.g.
-// storage outage) are reported as a whole-batch gRPC error, never as a
-// JobRejection.
+// Reason a single job in an enqueue batch was rejected. Every variant except
+// queue_full is deterministic: retrying the same job against the same server
+// configuration produces the same outcome. queue_full reflects queue depth at
+// admission time and clears once the queue drains. Transient server failures
+// (e.g. storage outage) are still reported as a whole-batch gRPC error, never
+// as a JobRejection.
+//
+// Servers may add rejection reasons over time. Clients must treat a rejection
+// whose reason they do not recognize as a rejection of unknown kind, not as a
+// malformed response.
 message JobRejection {
   oneof reason {
     // Strict mode is on and the target queue is not declared.
@@ -213,6 +214,10 @@ message JobRejection {
 
     // Structural validation failed (e.g. required field missing).
     InvalidRequest invalid_request = 12;
+
+    // The target queue is at capacity (max_queue_depth). The only
+    // non-deterministic rejection: it clears once the queue drains.
+    QueueFull queue_full = 13;
   }
 }
 
@@ -280,6 +285,13 @@ message InvalidRequest {
   string message = 1;
 }
 
+message QueueFull {
+  string queue = 1;
+
+  // The queue's configured max_queue_depth.
+  uint64 limit = 2;
+}
+
 // ============================================================================
 // Enqueue
 // ============================================================================
@@ -295,24 +307,30 @@ message EnqueueRequest {
   // Opaque payload with encoding hint for the worker.
   optional Payload payload = 3;
 
-  // Deduplication key. The server rejects duplicate enqueues
-  // with the same key within the queue's dedup window.
+  // Deduplication key, scoped to the target queue. A repeat enqueue with the
+  // same key inside the queue's dedup window is not enqueued again: it returns
+  // the original job's id with deduplicated=true. The window is time-based
+  // server configuration (not advertised in GetServerInfo) and is independent
+  // of job state, so a repeat within the window dedups even if the original
+  // job already completed or was dead-lettered.
   optional string idempotency_key = 4;
 
   // Priority override. If unset, the queue default is used.
-  // Range: 0-9. Higher priorities dequeue first.
+  // Range: 0–9. Higher priorities dequeue first.
   optional uint32 priority = 5;
 
   // Max attempts override. If unset, the queue default is used.
+  // Must be at least 1.
   optional uint32 max_attempts = 6;
 
   // Trace context from the producer.
   optional TraceContext trace_context = 7;
 
-  // Custom key-value pairs.
+  // Custom key-value pairs. Keys must be non-empty.
   map<string, PrimitiveValue> custom = 8;
 
   // Schedule for future execution. If unset, the job is available immediately.
+  // A time in the past is accepted and makes the job available immediately.
   google.protobuf.Timestamp scheduled_at = 9;
 }
 
@@ -328,7 +346,7 @@ message EnqueueResponse {
 
 // Batch enqueue request and response.
 message EnqueueBatchRequest {
-  // Jobs to enqueue.
+  // Jobs to enqueue. At least one.
   repeated EnqueueRequest jobs = 1;
 }
 
@@ -337,7 +355,7 @@ message EnqueueBatchResponse {
   repeated JobResult results = 1;
 }
 
-// Outcome of a single job in the batch.
+// Outcome of a single job in the batch. Exactly one outcome is set.
 message JobResult {
   oneof outcome {
     // The job was enqueued.
@@ -348,13 +366,13 @@ message JobResult {
   }
 }
 
-// Response for EnqueueAtomic.
+// Response for EnqueueAtomic. Exactly one outcome is set.
 message EnqueueAtomicResponse {
   oneof outcome {
-    // All jobs validated and were enqueued atomically.
+    // All jobs passed pre-flight checks and were enqueued atomically.
     EnqueueAtomicSuccess success = 1;
 
-    // At least one job failed validation; nothing was enqueued.
+    // At least one job failed a pre-flight check; nothing was enqueued.
     BatchValidationFailure rejection = 2;
   }
 }
@@ -364,8 +382,8 @@ message EnqueueAtomicSuccess {
   repeated EnqueueResponse responses = 1;
 }
 
-// The validation-failure branch of EnqueueAtomicResponse. Lists every job
-// that failed pre-flight validation.
+// The rejection branch of EnqueueAtomicResponse. Lists every job that failed
+// a pre-flight check (validation or queue capacity).
 message BatchValidationFailure {
   repeated JobValidationError errors = 1;
 }
@@ -384,19 +402,20 @@ message JobValidationError {
 
 // Worker requests one or more jobs in a long-polling manner.
 message ReserveRequest {
-  // Queues to pull from. Worker is willing to process jobs from any of these.
-  // Queue at index 0 is polled first, then index 1, etc.
+  // Queues to pull from, at least one. Worker is willing to process jobs from
+  // any of these. Queue at index 0 is polled first, then index 1, etc.
   repeated string queues = 1;
 
-  // How long the worker is willing to wait for a job.
+  // How long the worker is willing to wait for a job. Unset means no wait.
   // If no job is available within this window, the response has no jobs.
   // The server clamps this to its configured max (max_wait_timeout,
   // advertised in GetServerInfo); a larger value is not an error.
   google.protobuf.Duration wait_timeout = 2;
 
-  // Lease duration the worker wants. Server may clamp to its configured max
-  // (max_lease_duration, advertised in GetServerInfo). The worker must ack,
-  // nack, or extend before this elapses, or the job will be redelivered.
+  // Lease duration the worker wants. Must be positive. Server may clamp to its
+  // configured max (max_lease_duration, advertised in GetServerInfo). The
+  // worker must ack, nack, or extend before this elapses, or the job will be
+  // redelivered.
   google.protobuf.Duration lease_duration = 3;
 
   // A stable worker identifier, useful for observability and
@@ -449,6 +468,7 @@ message NackRequest {
   optional string worker_id = 5;
 }
 
+// Exactly one strategy must be set.
 message NackRetry {
   oneof strategy {
     // Use the queue's default retry policy.
@@ -475,7 +495,9 @@ message ExtendRequest {
   // The attempt for which this extend applies. Used to prevent extending a job that has been redelivered.
   uint32 attempt = 2;
 
-  // How much longer to extend the lease, measured from now.
+  // How much longer to extend the lease, measured from now. Must be positive.
+  // The server clamps this to its configured max (max_lease_duration,
+  // advertised in GetServerInfo); a larger value is not an error.
   google.protobuf.Duration lease_duration = 3;
 
   // Worker identifier for observability.
@@ -485,7 +507,7 @@ message ExtendRequest {
 message ExtendResponse {
   string job_id = 1;
 
-  // New lease expiration.
+  // New lease expiration. Always set.
   google.protobuf.Timestamp lease_expires_at = 2;
 }
 
@@ -493,9 +515,12 @@ message ExtendResponse {
 // Dead-letter
 // ============================================================================
 
-// Why a job was moved to dead-letter. Mirrors the three terminal paths on the
-// server: a worker explicitly rejected it, it ran out of attempts, or its lease
-// expired with no attempts left.
+// Why a job was moved to dead-letter. Mirrors the terminal paths on the
+// server: a worker explicitly rejected it, it ran out of attempts, its lease
+// expired with no attempts left, or an operator dead-lettered it by hand.
+//
+// More causes may be added over time. Clients must treat an unrecognized
+// value as DEAD_LETTER_CAUSE_UNSPECIFIED.
 enum DeadLetterCause {
   DEAD_LETTER_CAUSE_UNSPECIFIED = 0;
 
@@ -508,6 +533,9 @@ enum DeadLetterCause {
   // The lease expired while the job was on its final attempt, so it could not
   // be redelivered.
   DEAD_LETTER_CAUSE_LEASE_EXPIRED = 3;
+
+  // An operator dead-lettered the job through the admin API.
+  DEAD_LETTER_CAUSE_ADMIN = 4;
 }
 
 // A terminal record of a job that was dead-lettered. Retained only when the
@@ -524,7 +552,7 @@ message DeadLetterRecord {
   // Why the job was dead-lettered.
   DeadLetterCause cause = 2;
 
-  // Wall-clock time the job was dead-lettered.
+  // Wall-clock time the job was dead-lettered. Always set.
   google.protobuf.Timestamp failed_at = 3;
 
   // The attempt number the job died on (1-based).

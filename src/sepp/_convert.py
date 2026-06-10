@@ -195,6 +195,8 @@ def job_rejection_from_pb(r: pb.JobRejection) -> errors.JobRejection:
         )
     if which == "invalid_request":
         return errors.InvalidRequest(detail=x.message)
+    if which == "queue_full":
+        return errors.QueueFull(queue=x.queue, limit=x.limit)
 
     return errors.UnknownRejection()
 
@@ -314,6 +316,7 @@ _CAUSE_FROM_PB = {
     pb.DeadLetterCause.DEAD_LETTER_CAUSE_ATTEMPTS_EXHAUSTED: DeadLetterCause.ATTEMPTS_EXHAUSTED,
     pb.DeadLetterCause.DEAD_LETTER_CAUSE_REJECTED: DeadLetterCause.REJECTED,
     pb.DeadLetterCause.DEAD_LETTER_CAUSE_LEASE_EXPIRED: DeadLetterCause.LEASE_EXPIRED,
+    pb.DeadLetterCause.DEAD_LETTER_CAUSE_ADMIN: DeadLetterCause.ADMIN,
 }
 
 

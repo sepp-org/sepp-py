@@ -70,6 +70,7 @@ from sepp.errors import (
     MalformedServerInfoError,
     OverloadedError,
     PayloadTooLarge,
+    QueueFull,
     QueueNameTooLong,
     ReserveError,
     ScheduledTooFar,
@@ -178,5 +179,6 @@ __all__ = [
     "IdempotencyKeyTooLong",
     "ScheduledTooFar",
     "InvalidRequest",
+    "QueueFull",
     "UnknownRejection",
 ]
