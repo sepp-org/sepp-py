@@ -197,6 +197,8 @@ def job_rejection_from_pb(r: pb.JobRejection) -> errors.JobRejection:
         return errors.InvalidRequest(detail=x.message)
     if which == "queue_full":
         return errors.QueueFull(queue=x.queue, limit=x.limit)
+    if which == "queue_closing":
+        return errors.QueueClosing(queue=x.queue)
 
     return errors.UnknownRejection()
 

@@ -112,7 +112,12 @@ class ShutdownHandle:
 
 @dataclass(frozen=True)
 class _AutoExtend:
-    interval: timedelta
+    # None = derive the interval from the granted lease each cycle (default); set
+    # = the caller's explicit interval. The default must track the GRANTED lease,
+    # not the requested one: if the server clamps the lease below the request, a
+    # requested-lease/3 interval fires only after the granted lease has expired,
+    # so the job is redelivered and runs twice.
+    explicit_interval: timedelta | None
     extend_by: timedelta
 
 
@@ -155,13 +160,13 @@ class Worker:
         self._reserve_error_backoff = reserve_error_backoff
 
         if auto_extend or auto_extend_interval is not None:
-            interval = (
-                auto_extend_interval
+            explicit = (
+                max(auto_extend_interval, timedelta(milliseconds=1))
                 if auto_extend_interval is not None
-                else _heartbeat_interval(lease_duration)
+                else None
             )
             self._auto_extend: _AutoExtend | None = _AutoExtend(
-                interval=max(interval, timedelta(milliseconds=1)),
+                explicit_interval=explicit,
                 extend_by=lease_duration,
             )
         else:
@@ -449,7 +454,13 @@ class Worker:
         # `lease_lost` box is set before aborting so the caller's decision is
         # authoritative regardless of whether the handler honors cancellation.
         while True:
-            await asyncio.sleep(cfg.interval.total_seconds())
+            # Derive from the granted lease; see _AutoExtend.explicit_interval.
+            if cfg.explicit_interval is not None:
+                interval = cfg.explicit_interval
+            else:
+                remaining_ms = max(0, lease.known_expiry_ms - _convert.now_millis())  # type: ignore[attr-defined]
+                interval = _heartbeat_interval(timedelta(milliseconds=remaining_ms))
+            await asyncio.sleep(interval.total_seconds())
             try:
                 expiry = await lease.extend(cfg.extend_by)  # type: ignore[attr-defined]
                 logger.debug("lease extended to %s", expiry)

@@ -311,6 +311,8 @@ class ReserveOptions:
                 raise ValueError(f"queue name at index {i} must not be empty")
         if self.lease_duration <= timedelta(0):
             raise ValueError("lease_duration must be at least 1ms")
+        if self.max_jobs is not None and self.max_jobs < 1:
+            raise ValueError("max_jobs must be at least 1")
         if self.worker_id is not None and not self.worker_id:
             raise ValueError("worker_id must not be empty when set")
 

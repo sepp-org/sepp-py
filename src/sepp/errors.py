@@ -53,6 +53,7 @@ __all__ = [
     "ScheduledTooFar",
     "InvalidRequest",
     "QueueFull",
+    "QueueClosing",
     "UnknownRejection",
     "JobValidationError",
     "JobRejectedError",
@@ -185,8 +186,9 @@ class ServerInfoError(SeppError):
 class JobRejection:
     """Why the server refused a single job.
 
-    Every variant except :class:`QueueFull` is *deterministic*: re-sending the
-    same job against the same server configuration produces the same rejection.
+    Every variant except :class:`QueueFull` and :class:`QueueClosing` is
+    *deterministic*: re-sending the same job against the same server
+    configuration produces the same rejection.
     Transient problems surface as a :class:`ClientError` instead. Most limits
     behind these variants are advertised up front by
     :class:`~sepp.types.ServerInfo`, so a producer can validate locally before
@@ -361,8 +363,8 @@ class InvalidRequest(JobRejection):
 
 @dataclass(frozen=True)
 class QueueFull(JobRejection):
-    """The target queue is at its ``max_queue_depth``. The only
-    non-deterministic rejection: it clears once the queue drains."""
+    """The target queue is at its ``max_queue_depth``. Non-deterministic: it
+    clears once the queue drains."""
 
     queue: str
     limit: int
@@ -370,6 +372,18 @@ class QueueFull(JobRejection):
     @property
     def message(self) -> str:
         return f"queue {self.queue!r} is full (max depth {self.limit})"
+
+
+@dataclass(frozen=True)
+class QueueClosing(JobRejection):
+    """The target queue is being deleted and is not accepting new jobs.
+    Non-deterministic: it clears once the delete completes or is abandoned."""
+
+    queue: str
+
+    @property
+    def message(self) -> str:
+        return f"queue {self.queue!r} is being deleted and is not accepting new jobs"
 
 
 @dataclass(frozen=True)

@@ -221,6 +221,11 @@ def test_job_rejection_queue_full() -> None:
     assert isinstance(r, errors.QueueFull) and r.queue == "q" and r.limit == 1000
 
 
+def test_job_rejection_queue_closing() -> None:
+    r = _convert.job_rejection_from_pb(_rej(queue_closing=pb.QueueClosing(queue="q")))
+    assert isinstance(r, errors.QueueClosing) and r.queue == "q"
+
+
 def test_job_rejection_none_is_unknown() -> None:
     r = _convert.job_rejection_from_pb(pb.JobRejection())
     assert isinstance(r, errors.UnknownRejection)
@@ -242,6 +247,7 @@ def test_job_rejection_messages_render() -> None:
         errors.ScheduledTooFar(timedelta(minutes=1), datetime(2023, 1, 1, tzinfo=timezone.utc)),
         errors.InvalidRequest("m"),
         errors.QueueFull("q", 1),
+        errors.QueueClosing("q"),
         errors.UnknownRejection(),
     ):
         assert str(r)
