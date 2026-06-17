@@ -288,11 +288,12 @@ class Worker:
 
     def _reserve_opts_with_capacity(self) -> ReserveOptions:
         # The worker already bounds in-flight jobs, so never ask for more than
-        # the free capacity. Only clamp when the caller set an explicit max_jobs.
-        if self._opts.max_jobs is None:
-            return self._opts
+        # the free capacity.
         capacity = max(1, self._max_in_flight - self._in_flight)
-        return dataclasses.replace(self._opts, max_jobs=min(self._opts.max_jobs, capacity))
+        max_jobs = capacity
+        if self._opts.max_jobs is not None:
+            max_jobs = min(self._opts.max_jobs, capacity)
+        return dataclasses.replace(self._opts, max_jobs=max_jobs)
 
     def _spawn(self, tasks: set[asyncio.Task[None]], sem: asyncio.Semaphore, job: Job) -> None:
         self._in_flight += 1
