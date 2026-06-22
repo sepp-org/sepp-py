@@ -44,9 +44,7 @@ Protocol = "https://github.com/sepp-org/proto"
 
 [dependency-groups]
 dev = [
-    "grpcio-tools>=1.68",
     "mypy>=1.11",
-    "mypy-protobuf>=3.6",
     "pytest>=8.0",
     "pytest-asyncio>=0.24",
     "ruff>=0.6",
@@ -64,7 +62,7 @@ testpaths = ["tests"]
 [tool.ruff]
 src = ["src", "tests", "examples"]
 line-length = 100
-extend-exclude = ["src/sepp/_pb"]
+extend-exclude = ["src/sepp/v1"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "W"]
@@ -76,10 +74,10 @@ strict = true
 # validated by running them, not by mypy.
 files = ["src/sepp", "examples"]
 # Generated protobuf stubs are excluded from strict checking.
-exclude = ["src/sepp/_pb/"]
+exclude = ["src/sepp/v1/"]
 
 [[tool.mypy.overrides]]
-module = "sepp._pb.*"
+module = "sepp.v1.*"
 ignore_errors = true
 follow_imports = "skip"
 

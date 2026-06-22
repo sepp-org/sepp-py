@@ -12,7 +12,6 @@ from typing import TYPE_CHECKING
 from google.protobuf.timestamp_pb2 import Timestamp as _Timestamp
 
 from sepp import errors
-from sepp._pb import queue_pb2 as pb
 from sepp.types import (
     DeadLetterCause,
     DeadLetterRecord,
@@ -28,6 +27,7 @@ from sepp.types import (
     ServerInfo,
     TraceContext,
 )
+from sepp.v1 import queue_pb2 as pb
 
 if TYPE_CHECKING:
     from sepp.client import SeppClient

@@ -1,0 +1,8 @@
+version: v2
+inputs:
+  - module: buf.build/sepp-org/sepp-proto:v1.2.0
+plugins:
+  - remote: buf.build/protocolbuffers/python:v28.3
+    out: src
+  - remote: buf.build/grpc/python:v1.70.0
+    out: src

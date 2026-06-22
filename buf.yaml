@@ -1,14 +1,4 @@
-# This package vendors the sepp wire contract under `proto/sepp/v1/queue.proto`. It is
-# NOT the source of truth: the contract lives in the sepp `proto` repo and is
-# published to buf.build/sepp-org/sepp-proto, where lint/breaking checks are
-# enforced.
+# Regenerate with:
 #
-# buf is not part of the build — `grpc_tools.protoc` compiles the vendored file
-# directly (see scripts/gen_proto.sh), and the generated stubs are committed
-# under src/sepp/_pb/, so installing the package needs no protoc or buf. This
-# file exists only to document provenance and how to refresh the snapshot:
-#
-#     buf export buf.build/sepp-org/sepp-proto:v1.1.2 -o proto
+#     buf generate
 version: v2
-modules:
-  - path: proto

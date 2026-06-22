@@ -22,8 +22,6 @@ import grpc
 import grpc.aio
 
 from sepp import _convert, _otel, errors
-from sepp._pb import queue_pb2 as pb
-from sepp._pb import queue_pb2_grpc as pb_grpc
 from sepp.types import (
     DeadLetterRecord,
     EnqueueAck,
@@ -33,6 +31,8 @@ from sepp.types import (
     ReserveOptions,
     ServerInfo,
 )
+from sepp.v1 import queue_pb2 as pb
+from sepp.v1 import queue_pb2_grpc as pb_grpc
 
 __all__ = ["SeppClient", "RetryPolicy", "RetryDirective", "Lease"]
 

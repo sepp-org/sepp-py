@@ -252,7 +252,7 @@ emits into it. See [`examples/traced.py`](examples/traced.py).
 
 ```sh
 uv venv && uv pip install -e ".[otel]" pytest pytest-asyncio mypy ruff grpcio-tools
-./scripts/gen_proto.sh        # regenerate stubs under src/sepp/_pb after editing the proto
+buf generate                      # regenerate stubs under src/sepp/v1/ from the BSR
 uv run pytest                 # run the test suite
 uv run ruff check . && uv run mypy
 ```
