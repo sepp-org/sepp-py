@@ -26,7 +26,6 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import dataclasses
-import logging
 import os
 import socket
 import uuid
@@ -41,7 +40,7 @@ from sepp.types import Job, JobCtx, Payload, ReserveOptions
 
 __all__ = ["Worker", "HandlerError", "ShutdownHandle", "DuplicateHandlerError"]
 
-logger = logging.getLogger("sepp")
+logger = _otel.create_sepp_logger("sepp")
 
 Handler = Callable[[Payload | None, JobCtx], Awaitable[None]]
 

@@ -14,6 +14,7 @@ providers).
 from __future__ import annotations
 
 import contextlib
+import logging
 from collections.abc import Iterator
 from typing import TYPE_CHECKING, Any
 
@@ -192,3 +193,65 @@ class WorkerMetrics:
     def record_reserve_failed(self) -> None:
         if self._enabled:
             self._reserves_failed.add(1)
+
+
+_SEVERITY_NUMBER: dict[int, int] = {
+    logging.DEBUG: 5,
+    logging.INFO: 9,
+    logging.WARNING: 13,
+    logging.ERROR: 17,
+    logging.CRITICAL: 21,
+}
+
+
+def _emit_span_event(level: int, msg: str, args: tuple) -> None:
+    """Record a log event on the active span, if any."""
+    if not OTEL_AVAILABLE:
+        return
+    span = _trace.get_current_span()
+    if not span.is_recording():
+        return
+    formatted = msg % args if args else msg
+    span.add_event(
+        "",
+        attributes={
+            "event.name": "log",
+            "log.severity": _SEVERITY_NUMBER.get(level, 0),
+            "log.message": formatted,
+        },
+    )
+
+
+class _SeppLogger:
+    """Wraps a standard :class:`logging.Logger` so every log call is also
+    recorded as an OpenTelemetry span event on the active span."""
+
+    __slots__ = ("_logger",)
+
+    def __init__(self, logger: logging.Logger) -> None:
+        self._logger = logger
+
+    def debug(self, msg: str, *args: object) -> None:
+        self._logger.debug(msg, *args)
+        _emit_span_event(logging.DEBUG, msg, args)
+
+    def info(self, msg: str, *args: object) -> None:
+        self._logger.info(msg, *args)
+        _emit_span_event(logging.INFO, msg, args)
+
+    def warning(self, msg: str, *args: object) -> None:
+        self._logger.warning(msg, *args)
+        _emit_span_event(logging.WARNING, msg, args)
+
+    def error(self, msg: str, *args: object) -> None:
+        self._logger.error(msg, *args)
+        _emit_span_event(logging.ERROR, msg, args)
+
+
+def create_sepp_logger(name: str) -> _SeppLogger | logging.Logger:
+    """Returns a logger that emits span events alongside log calls when
+    OpenTelemetry is installed, or a plain :class:`logging.Logger` otherwise."""
+    logger = logging.getLogger(name)
+    if OTEL_AVAILABLE:
+        return _SeppLogger(logger)
+    return logger

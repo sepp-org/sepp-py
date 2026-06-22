@@ -12,7 +12,6 @@ For consuming jobs you can call :meth:`reserve`, :meth:`ack`, :meth:`nack`, and
 
 from __future__ import annotations
 
-import logging
 import random
 from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import dataclass
@@ -37,7 +36,7 @@ from sepp.types import (
 
 __all__ = ["SeppClient", "RetryPolicy", "RetryDirective", "Lease"]
 
-logger = logging.getLogger("sepp")
+logger = _otel.create_sepp_logger("sepp")
 
 _T = TypeVar("_T")
 
