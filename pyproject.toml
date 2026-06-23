@@ -34,8 +34,8 @@ dependencies = [
 # Mirrors the Rust client's default-on `opentelemetry` feature: spans, metrics,
 # and W3C trace-context propagation from producer to worker.
 otel = [
-    "opentelemetry-api>=1.20",
-    "opentelemetry-sdk>=1.20",
+    "opentelemetry-api>=1.42.1",
+    "opentelemetry-sdk>=1.42.1",
 ]
 
 [project.urls]
@@ -49,7 +49,7 @@ dev = [
     "pytest-asyncio>=1.4.0",
     "ruff>=0.15.18",
     # exercised by examples/traced.py
-    "opentelemetry-exporter-otlp-proto-grpc>=1.20",
+    "opentelemetry-exporter-otlp-proto-grpc>=1.42.1",
     "testcontainers>=4.14.2",
     "types-protobuf>=7.34.1.20260518",
 ]
