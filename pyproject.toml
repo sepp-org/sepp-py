@@ -26,8 +26,8 @@ classifiers = [
     "Typing :: Typed",
 ]
 dependencies = [
-    "grpcio>=1.68",
-    "protobuf>=5.27",
+    "grpcio>=1.81.1",
+    "protobuf>=7.35.1",
 ]
 
 [project.optional-dependencies]
