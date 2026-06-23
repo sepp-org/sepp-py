@@ -23,6 +23,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v7
       - run: uvx ruff check
+      - run: uv sync
       - run: uv run mypy src/sepp examples
 
   test:
@@ -45,7 +46,7 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
       - run: uv sync ${{ matrix.extras }}
-      - run: uv run pytest tests/ --ignore=tests/integration
+      - run: uv run python -m pytest tests/ --ignore=tests/integration
 
   integration:
     runs-on: ubuntu-latest
@@ -56,4 +57,4 @@ jobs:
         with:
           python-version: "3.12"
       - run: uv sync --extra otel
-      - run: uv run pytest tests/integration/ -v
+      - run: uv run python -m pytest tests/integration/ -v
