@@ -125,3 +125,76 @@ def test_retry_directive_constants() -> None:
 def test_retry_directive_after() -> None:
     d = RetryDirective.after(timedelta(seconds=5))
     assert d.kind == "after" and d.delay == timedelta(seconds=5)
+
+
+# -- error constructor attributes -------------------------------------------
+
+
+def test_connect_error_attributes() -> None:
+    err = errors.ConnectError("host:1", "boom")
+    assert err.addr == "host:1"
+    assert err.reason == "boom"
+    assert "host:1" in str(err)
+
+
+def test_unexpected_status_error_attributes() -> None:
+    err = errors.UnexpectedStatusError(grpc.StatusCode.NOT_FOUND, "gone")
+    assert err.code == grpc.StatusCode.NOT_FOUND
+    assert err.status_message == "gone"
+
+
+def test_job_rejected_error_carries_rejection() -> None:
+    rej = errors.PayloadTooLarge(1, 2)
+    err = errors.JobRejectedError(rej)
+    assert err.rejection is rej
+    assert "payload size" in str(err)
+
+
+def test_batch_validation_error_carries_errors() -> None:
+    ve = errors.JobValidationError(index=0, rejection=errors.UnknownQueue("q"))
+    err = errors.BatchValidationError([ve])
+    assert err.errors == [ve]
+    assert "1 job" in str(err)
+
+
+def test_job_not_found_default_message() -> None:
+    err = errors.JobNotFoundError()
+    assert "no in-flight job" in str(err)
+
+
+def test_attempt_mismatch_default_message() -> None:
+    err = errors.AttemptMismatchError()
+    assert "lease was reassigned" in str(err)
+
+
+def test_malformed_job_error_carries_cause() -> None:
+    cause = errors.JobConversionError("bad field")
+    err = errors.MalformedJobError(cause)
+    assert err.cause is cause
+    assert "bad field" in str(err)
+
+
+def test_malformed_server_info_error_carries_cause() -> None:
+    cause = errors.ServerInfoError("bad version")
+    err = errors.MalformedServerInfoError(cause)
+    assert err.cause is cause
+    assert "bad version" in str(err)
+
+
+def test_sepp_error_is_exception() -> None:
+    assert issubclass(errors.SeppError, Exception)
+
+
+def test_client_error_hierarchy() -> None:
+    assert issubclass(errors.ClientError, errors.SeppError)
+
+
+def test_lease_error_hierarchy() -> None:
+    assert issubclass(errors.LeaseError, errors.SeppError)
+    assert issubclass(errors.JobNotFoundError, errors.LeaseError)
+    assert issubclass(errors.AttemptMismatchError, errors.LeaseError)
+
+
+def test_reserve_error_hierarchy() -> None:
+    assert issubclass(errors.ReserveError, errors.SeppError)
+    assert issubclass(errors.UnknownQueuesError, errors.ReserveError)

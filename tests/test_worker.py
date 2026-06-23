@@ -333,3 +333,212 @@ def test_default_worker_id_format() -> None:
     assert len(parts) == 3
     assert parts[1].isdigit()  # pid
     assert len(parts[2]) == 8  # random hex suffix
+
+
+# -- reserve error handling -------------------------------------------------
+
+
+async def test_reserve_error_backoff_and_continue() -> None:
+    client = FakeClient([])
+    error_raised = asyncio.Event()
+    recovered = asyncio.Event()
+
+    call_count = 0
+
+    async def failing_reserve(opts: object) -> list[Job] | None:
+        nonlocal call_count
+        call_count += 1
+        if call_count <= 2:
+            raise errors.TransportError("transient")
+        if not error_raised.is_set():
+            error_raised.set()
+        recovered.set()
+        await asyncio.sleep(0.01)
+        return None
+
+    client.reserve = failing_reserve  # type: ignore[method-assign]
+    worker = Worker(client, ["q"], timedelta(seconds=30), reserve_error_backoff=timedelta(0))  # type: ignore[arg-type]
+
+    task = asyncio.create_task(worker.run())
+    await asyncio.wait_for(error_raised.wait(), 2.0)
+    await asyncio.wait_for(recovered.wait(), 2.0)
+    await asyncio.sleep(0.05)
+    worker.shutdown_handle().shutdown()
+    await asyncio.wait_for(task, 2.0)
+    assert call_count >= 3
+
+
+# -- dispose error paths ----------------------------------------------------
+
+
+async def test_dispose_ack_job_not_found_is_logged() -> None:
+    client = FakeClient([])
+    client._batches = [[make_job(client, "t")]]
+    client.ack = _raise_after_call(errors.JobNotFoundError())  # type: ignore[method-assign]
+    ready = asyncio.Event()
+    worker = Worker(client, ["q"], timedelta(seconds=30))  # type: ignore[arg-type]
+
+    @worker.handler("t")
+    async def handle(payload: object, ctx: object) -> None:
+        ready.set()
+
+    task = asyncio.create_task(worker.run())
+    await asyncio.wait_for(ready.wait(), 2.0)
+    worker.shutdown_handle().shutdown()
+    await asyncio.wait_for(task, 2.0)
+    # job not found on ack: logged, worker continues without crashing
+
+
+async def test_dispose_nack_sepp_error_is_logged() -> None:
+    client = FakeClient([])
+    client._batches = [[make_job(client, "t")]]
+    client.nack = _raise_after_call(errors.TransportError("nack failed"))  # type: ignore[method-assign]
+    worker = Worker(client, ["q"], timedelta(seconds=30))  # type: ignore[arg-type]
+
+    @worker.handler("t")
+    async def handle(payload: object, ctx: object) -> None:
+        raise HandlerError.retry("expected failure")
+
+    ready_sig = asyncio.Event()
+
+    @worker.handler("s")
+    async def handle_s(payload: object, ctx: object) -> None:
+        ready_sig.set()
+
+    task = asyncio.create_task(worker.run())
+    await asyncio.sleep(0.1)
+    worker.shutdown_handle().shutdown()
+    await asyncio.wait_for(task, 2.0)
+
+
+def _raise_after_call(exc: Exception) -> object:
+    async def _fn(*args: object, **kwargs: object) -> None:
+        raise exc
+
+    return _fn
+
+
+# -- concurrency bounding ---------------------------------------------------
+
+
+async def test_max_in_flight_bounds_concurrency() -> None:
+    client = FakeClient([])
+    client._batches = [[
+        make_job(client, "t"),
+        make_job(client, "t", "j2"),
+        make_job(client, "t", "j3"),
+    ]]
+    max_concurrent = 0
+    current = 0
+    lock = asyncio.Lock()
+
+    async def track_enter() -> None:
+        nonlocal current, max_concurrent
+        async with lock:
+            current += 1
+            max_concurrent = max(max_concurrent, current)
+
+    async def track_leave() -> None:
+        nonlocal current
+        async with lock:
+            current -= 1
+
+    release = asyncio.Event()
+    worker = Worker(
+        client,  # type: ignore[arg-type]
+        ["q"],
+        timedelta(seconds=30),
+        max_in_flight=2,
+    )
+
+    @worker.handler("t")
+    async def handle(payload: object, ctx: object) -> None:
+        await track_enter()
+        await release.wait()
+        await track_leave()
+
+    task = asyncio.create_task(worker.run())
+    await asyncio.sleep(0.1)  # let all 3 jobs be reserved and spawn
+    await asyncio.sleep(0.05)
+    release.set()
+    await asyncio.sleep(0.1)
+    worker.shutdown_handle().shutdown()
+    await asyncio.wait_for(task, 2.0)
+    assert max_concurrent <= 2
+
+
+# -- handler registration ---------------------------------------------------
+
+
+async def test_remove_handler() -> None:
+    client = FakeClient([])
+    worker = Worker(client, ["q"], timedelta(seconds=30))  # type: ignore[arg-type]
+    worker.handle("t", lambda p, c: asyncio.sleep(0))  # type: ignore[arg-type]
+    worker.remove_handler("t")
+    worker.remove_handler("nonexistent")  # no error
+
+
+async def test_shutdown_handle_is_shutdown() -> None:
+    client = FakeClient([])
+    worker = Worker(client, ["q"], timedelta(seconds=30))  # type: ignore[arg-type]
+    h = worker.shutdown_handle()
+    assert h.is_shutdown is False
+    h.shutdown()
+    assert h.is_shutdown is True
+
+
+def test_handler_error_retry_after_constructor() -> None:
+    delay = timedelta(seconds=10)
+    err = HandlerError.retry_after("slow down", delay)
+    assert err.reason == "slow down"
+    assert err.directive.kind == "after"
+    assert err.directive.delay == delay
+
+
+# -- auto_extend default interval (derived from granted lease) --------------
+
+
+async def test_auto_extend_default_interval_derives_from_lease() -> None:
+    client = FakeClient([])
+    j = pb.Job(
+        id=VALID_UUID,
+        job_type="t",
+        priority=1,
+        enqueued_at=datetime(1970, 1, 1, tzinfo=timezone.utc)
+        + timedelta(milliseconds=1_700_000_000_000),
+        attempt=1,
+        max_attempts=3,
+        lease_expires_at=datetime.now(timezone.utc) + timedelta(milliseconds=100),
+    )
+    client._batches = [[_convert.job_from_pb(client, j, "worker-1")]]  # type: ignore[arg-type]
+    ready = asyncio.Event()
+    worker = Worker(
+        client,  # type: ignore[arg-type]
+        ["q"],
+        timedelta(milliseconds=100),
+        auto_extend=True,
+    )
+
+    @worker.handler("t")
+    async def handle(payload: object, ctx: object) -> None:
+        await asyncio.sleep(0.15)
+        ready.set()
+
+    await drive(worker, ready)
+    assert client.extends >= 1
+    assert client.acked == [VALID_UUID]
+
+
+# -- max_in_flight clamping -------------------------------------------------
+
+
+async def test_max_in_flight_clamped_to_one() -> None:
+    client = FakeClient([])
+    worker = Worker(client, ["q"], timedelta(seconds=30), max_in_flight=0)  # type: ignore[arg-type]
+    assert worker._max_in_flight == 1
+
+
+async def test_worker_custom_worker_id() -> None:
+    client = FakeClient([])
+    worker = Worker(client, ["q"], timedelta(seconds=30), worker_id="custom-1")  # type: ignore[arg-type]
+    assert worker._opts.worker_id == "custom-1"

@@ -213,3 +213,31 @@ async def test_jobctx_extend_without_lease_raises() -> None:
     )
     with pytest.raises(RuntimeError):
         await ctx.extend(timedelta(seconds=1))
+
+
+# -- ReserveOptions additional validation -----------------------------------
+
+
+def test_reserve_options_max_jobs_less_than_one() -> None:
+    with pytest.raises(ValueError, match="max_jobs"):
+        ReserveOptions(["q"], timedelta(seconds=1), max_jobs=0)
+
+
+def test_reserve_options_max_jobs_negative() -> None:
+    with pytest.raises(ValueError, match="max_jobs"):
+        ReserveOptions(["q"], timedelta(seconds=1), max_jobs=-1)
+
+
+def test_reserve_options_negative_lease() -> None:
+    with pytest.raises(ValueError, match="lease_duration"):
+        ReserveOptions(["q"], timedelta(seconds=-5))
+
+
+# -- EnqueueRequest additional validation -----------------------------------
+
+
+def test_enqueue_request_bool_priority_raises() -> None:
+    with pytest.raises(PriorityOutOfRangeError):
+        EnqueueRequest("q", "t", priority=True)  # type: ignore[arg-type]
+
+

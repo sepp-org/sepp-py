@@ -486,3 +486,251 @@ def test_auth_metadata_none() -> None:
 def test_auth_metadata_invalid(bad: str) -> None:
     with pytest.raises(errors.InvalidApiKeyError):
         _auth_metadata_for(bad)
+
+
+# -- connect error paths ----------------------------------------------------
+
+
+async def test_connect_timeout_raises_connect_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    import asyncio
+
+    class _SlowChannel:
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            pass
+
+        async def channel_ready(self) -> None:
+            raise asyncio.TimeoutError()
+
+        async def close(self) -> None:
+            pass
+
+    monkeypatch.setattr(grpc.aio, "insecure_channel", _SlowChannel)
+    with pytest.raises(errors.ConnectError, match="timed out"):
+        await SeppClient.connect("127.0.0.1:1", connect_timeout=timedelta(milliseconds=1))
+
+
+async def test_connect_rpc_error_raises_connect_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    class _ErrorChannel:
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            pass
+
+        async def channel_ready(self) -> None:
+            raise rpc_error(grpc.StatusCode.UNAVAILABLE, "connection refused")
+
+        async def close(self) -> None:
+            pass
+
+    monkeypatch.setattr(grpc.aio, "insecure_channel", _ErrorChannel)
+    with pytest.raises(errors.ConnectError, match="connection refused"):
+        await SeppClient.connect("127.0.0.1:1", connect_timeout=timedelta(milliseconds=10))
+
+
+async def test_connect_with_http_scheme(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_insecure_channel(target: str, options: object) -> _FakeChannel:
+        captured["target"] = target
+        return _FakeChannel()
+
+    monkeypatch.setattr(grpc.aio, "insecure_channel", fake_insecure_channel)
+    await SeppClient.connect("http://127.0.0.1:50051")
+    assert captured["target"] == "127.0.0.1:50051"
+
+
+# -- close / context manager ------------------------------------------------
+
+
+async def test_close_closes_channel() -> None:
+    ch = _FakeChannel()
+    client = SeppClient.from_channel(ch)  # type: ignore[arg-type]
+    await client.close()
+
+
+async def test_async_context_manager() -> None:
+    ch = _FakeChannel()
+    async with SeppClient.from_channel(ch) as client:  # type: ignore[arg-type]
+        assert isinstance(client, SeppClient)
+
+
+# -- drain_dead_letters -----------------------------------------------------
+
+
+def _valid_dl_job_pb() -> pb.Job:
+    return pb.Job(
+        id=VALID_UUID,
+        job_type="t",
+        priority=1,
+        queue="q",
+        enqueued_at=datetime(1970, 1, 1, tzinfo=timezone.utc)
+        + timedelta(milliseconds=1_700_000_000_000),
+        attempt=1,
+        max_attempts=3,
+        lease_expires_at=datetime(1970, 1, 1, tzinfo=timezone.utc)
+        + timedelta(milliseconds=1_700_000_060_000),
+    )
+
+
+def _valid_dl_record() -> pb.DeadLetterRecord:
+    return pb.DeadLetterRecord(
+        job=_valid_dl_job_pb(),
+        cause=pb.DeadLetterCause.DEAD_LETTER_CAUSE_ATTEMPTS_EXHAUSTED,
+        failed_at=datetime(1970, 1, 1, tzinfo=timezone.utc)
+        + timedelta(milliseconds=1_700_000_100_000),
+        final_attempt=3,
+        last_reason="boom",
+    )
+
+
+async def test_drain_dead_letters_returns_records() -> None:
+    stub = FakeStub()
+    stub.DrainDeadLetters = FakeUnaryUnary(
+        pb.DrainDeadLettersResponse(records=[_valid_dl_record()])
+    )
+    client = make_client(stub)
+    records = await client.drain_dead_letters()
+    assert len(records) == 1
+    assert records[0].job_id == VALID_UUID
+    from sepp.types import DeadLetterCause
+
+    assert records[0].cause == DeadLetterCause.ATTEMPTS_EXHAUSTED
+
+
+async def test_drain_dead_letters_empty() -> None:
+    stub = FakeStub()
+    stub.DrainDeadLetters = FakeUnaryUnary(pb.DrainDeadLettersResponse())
+    client = make_client(stub)
+    records = await client.drain_dead_letters()
+    assert records == []
+
+
+async def test_drain_dead_letters_filters_by_queue() -> None:
+    stub = FakeStub()
+    stub.DrainDeadLetters = FakeUnaryUnary(
+        pb.DrainDeadLettersResponse(records=[_valid_dl_record()])
+    )
+    client = make_client(stub)
+    await client.drain_dead_letters(queue="my-queue", max_records=3)
+    req = stub.DrainDeadLetters.last_request  # type: ignore[attr-defined]
+    assert req.queue == "my-queue"
+    assert req.max == 3
+
+
+async def test_drain_dead_letters_transport_error() -> None:
+    stub = FakeStub()
+    stub.DrainDeadLetters = FakeUnaryUnary(error=rpc_error(grpc.StatusCode.UNAVAILABLE))
+    client = make_client(stub)
+    with pytest.raises(errors.TransportError):
+        await client.drain_dead_letters()
+
+
+async def test_drain_dead_letters_skips_malformed() -> None:
+    stub = FakeStub()
+    bad = _valid_dl_record()
+    bad.job.id = ""  # malformed
+    stub.DrainDeadLetters = FakeUnaryUnary(pb.DrainDeadLettersResponse(records=[bad]))
+    client = make_client(stub)
+    records = await client.drain_dead_letters()
+    assert records == []  # malformed skipped
+
+
+async def test_drain_dead_letters_not_retried() -> None:
+    stub = FakeStub()
+    stub.DrainDeadLetters = FakeUnaryUnary(error=rpc_error(grpc.StatusCode.UNAVAILABLE))
+    client = make_client(stub, retry_policy=FAST_RETRY)
+    with pytest.raises(errors.TransportError):
+        await client.drain_dead_letters()
+    assert stub.DrainDeadLetters.calls == 1  # type: ignore[attr-defined]
+
+
+# -- malformed responses ----------------------------------------------------
+
+
+async def test_enqueue_batch_missing_outcome_raises() -> None:
+    stub = FakeStub()
+    result = pb.JobResult()
+    stub.EnqueueBatch = FakeUnaryUnary(pb.EnqueueBatchResponse(results=[result]))
+    client = make_client(stub)
+    with pytest.raises(errors.MalformedResponseError, match="missing outcome"):
+        await client.enqueue_batch([EnqueueRequest("q", "t")])
+
+
+async def test_enqueue_atomic_missing_outcome_raises() -> None:
+    stub = FakeStub()
+    resp = pb.EnqueueAtomicResponse()
+    stub.EnqueueAtomic = FakeUnaryUnary(resp)
+    client = make_client(stub)
+    with pytest.raises(errors.MalformedResponseError, match="missing outcome"):
+        await client.enqueue_atomic([EnqueueRequest("q", "t")])
+
+
+async def test_enqueue_atomic_empty_batch_raises() -> None:
+    client = make_client(FakeStub())
+    with pytest.raises(errors.EmptyBatchError):
+        await client.enqueue_atomic([])
+
+
+async def test_enqueue_atomic_count_mismatch() -> None:
+    stub = FakeStub()
+    resp = pb.EnqueueAtomicResponse(
+        success=pb.EnqueueAtomicSuccess(responses=[pb.EnqueueResponse(job_id="a")])
+    )
+    stub.EnqueueAtomic = FakeUnaryUnary(resp)
+    client = make_client(stub)
+    with pytest.raises(errors.BatchResultCountMismatchError):
+        await client.enqueue_atomic([EnqueueRequest("q", "t"), EnqueueRequest("q", "t")])
+
+
+# -- Lease class ------------------------------------------------------------
+
+
+async def test_lease_worker_id() -> None:
+    from sepp.client import Lease
+
+    lease = Lease(
+        make_client(FakeStub()),
+        "job-1",
+        1,
+        datetime(1970, 1, 1, tzinfo=timezone.utc) + timedelta(seconds=60),
+        "worker-abc",
+    )
+    assert lease.worker_id == "worker-abc"
+
+
+async def test_lease_known_expiry_ms() -> None:
+    from sepp.client import Lease
+
+    expiry = datetime(1970, 1, 1, tzinfo=timezone.utc) + timedelta(seconds=30)
+    lease = Lease(make_client(FakeStub()), "job-1", 1, expiry, None)
+    assert lease.known_expiry_ms == 30000
+
+
+async def test_lease_extend() -> None:
+    from sepp.client import Lease
+
+    stub = FakeStub()
+    new_expiry = datetime(1970, 1, 1, tzinfo=timezone.utc) + timedelta(milliseconds=60000)
+    stub.Extend = FakeUnaryUnary(
+        pb.ExtendResponse(job_id="job-1", lease_expires_at=new_expiry)
+    )
+    client = make_client(stub)
+    lease = Lease(
+        client,
+        "job-1",
+        1,
+        datetime(1970, 1, 1, tzinfo=timezone.utc) + timedelta(seconds=30),
+        "worker-1",
+    )
+    expiry = await lease.extend(timedelta(seconds=30))
+    assert expiry == new_expiry
+    assert lease.known_expiry_ms == 60000
+
+
+# -- connect with TLS + API key warning ------------------------------------
+
+
+async def test_connect_api_key_without_tls_warns(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.setattr(grpc.aio, "insecure_channel", lambda *a, **kw: _FakeChannel())  # type: ignore[misc]
+    await SeppClient.connect("127.0.0.1:1", api_key="secret")
+    assert "API key configured without TLS" in caplog.text

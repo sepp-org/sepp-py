@@ -513,3 +513,126 @@ def test_dead_letter_record_replays_into_its_queue() -> None:
     assert req.job_type == "send_email"
     assert req.priority == Priority(3)
     assert req.payload is not None and req.payload.data == b"\x01\x02\x03"
+
+
+def test_dead_letter_record_replays_nil_payload() -> None:
+    msg = _valid_dead_letter()
+    msg.job.ClearField("payload")
+    req = _convert.dead_letter_record_from_pb(msg).to_enqueue_request()
+    assert req.payload is None
+
+
+def test_dead_letter_record_replays_nil_trace_context() -> None:
+    msg = _valid_dead_letter()
+    msg.job.ClearField("trace_context")
+    req = _convert.dead_letter_record_from_pb(msg).to_enqueue_request()
+    assert req.trace_context is None
+
+
+def test_dead_letter_record_replays_empty_custom() -> None:
+    msg = _valid_dead_letter()
+    msg.job.ClearField("custom")
+    req = _convert.dead_letter_record_from_pb(msg).to_enqueue_request()
+    assert req.custom == {}
+
+
+def test_dead_letter_record_missing_job_id() -> None:
+    msg = _valid_dead_letter()
+    msg.job.id = ""
+    with pytest.raises(errors.JobConversionError, match="id"):
+        _convert.dead_letter_record_from_pb(msg)
+
+
+def test_dead_letter_record_missing_job_type() -> None:
+    msg = _valid_dead_letter()
+    msg.job.job_type = ""
+    with pytest.raises(errors.JobConversionError, match="job_type"):
+        _convert.dead_letter_record_from_pb(msg)
+
+
+def test_dead_letter_record_invalid_priority() -> None:
+    msg = _valid_dead_letter()
+    msg.job.priority = 99
+    with pytest.raises(errors.JobConversionError, match="priority"):
+        _convert.dead_letter_record_from_pb(msg)
+
+
+def test_dead_letter_record_invalid_enqueued_at() -> None:
+    msg = _valid_dead_letter()
+    msg.job.enqueued_at.seconds = -1
+    with pytest.raises(errors.JobConversionError, match="enqueued_at"):
+        _convert.dead_letter_record_from_pb(msg)
+
+
+def test_dead_letter_record_invalid_failed_at() -> None:
+    msg = _valid_dead_letter()
+    msg.failed_at.seconds = -1
+    with pytest.raises(errors.JobConversionError, match="failed_at"):
+        _convert.dead_letter_record_from_pb(msg)
+
+
+def test_dead_letter_record_empty_custom_value() -> None:
+    msg = _valid_dead_letter()
+    msg.job.custom["k"].CopyFrom(pb.PrimitiveValue())
+    with pytest.raises(errors.JobConversionError, match="no value set"):
+        _convert.dead_letter_record_from_pb(msg)
+
+
+# -- timestamp / datetime edge cases ----------------------------------------
+
+
+def test_datetime_to_millis_naive_utc() -> None:
+    dt = datetime(1970, 1, 1)  # naive, no tzinfo
+    assert _convert.datetime_to_millis(dt) == 0
+
+
+def test_millis_to_datetime_overflow() -> None:
+    assert _convert.millis_to_datetime(10**20) is None
+
+
+def test_timestamp_to_datetime_valid() -> None:
+    from google.protobuf.timestamp_pb2 import Timestamp
+
+    ts = Timestamp()
+    ts.FromDatetime(datetime(2020, 1, 1, tzinfo=timezone.utc))
+    dt = _convert.timestamp_to_datetime(ts)
+    assert dt is not None
+    assert dt.year == 2020
+
+
+def test_timestamp_to_datetime_negative_seconds() -> None:
+    from google.protobuf.timestamp_pb2 import Timestamp
+
+    ts = Timestamp(seconds=-1)
+    assert _convert.timestamp_to_datetime(ts) is None
+
+
+def test_timestamp_to_datetime_negative_nanos() -> None:
+    from google.protobuf.timestamp_pb2 import Timestamp
+
+    ts = Timestamp(seconds=0, nanos=-1)
+    assert _convert.timestamp_to_datetime(ts) is None
+
+
+def test_primitive_to_pb_false() -> None:
+    pv = _convert.primitive_to_pb(False)
+    assert pv.WhichOneof("value") == "bool_value"
+    assert pv.bool_value is False
+
+
+def test_now_millis_is_recent() -> None:
+    import time
+
+    now = _convert.now_millis()
+    expected = int(time.time() * 1000)
+    assert abs(now - expected) < 5000
+
+
+# -- server_info all defaults -----------------------------------------------
+
+
+def test_server_info_dead_letter_retention_enabled() -> None:
+    msg = _valid_server_info()
+    msg.dead_letter_retention_enabled = True
+    info = _convert.server_info_from_pb(msg)
+    assert info.dead_letter_retention_enabled is True
