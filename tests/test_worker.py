@@ -6,7 +6,6 @@ import asyncio
 from datetime import datetime, timedelta, timezone
 
 import pytest
-from tests.conftest import VALID_UUID
 
 from sepp import _convert, errors
 from sepp._pb import queue_pb2 as pb
@@ -19,6 +18,7 @@ from sepp.worker import (
     _default_worker_id,
     _heartbeat_interval,
 )
+from tests.conftest import VALID_UUID
 
 
 class FakeClient:

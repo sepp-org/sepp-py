@@ -5,16 +5,16 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 
 import pytest
+
+from sepp import _convert, errors
+from sepp._pb import queue_pb2 as pb
+from sepp.types import DeadLetterCause, EnqueueRequest, Payload, Priority, TraceContext
 from tests.conftest import (
     VALID_TP,
     VALID_UUID,
     FakeStub,  # noqa: F401  (kept for symmetry)
     make_client,
 )
-
-from sepp import _convert, errors
-from sepp._pb import queue_pb2 as pb
-from sepp.types import DeadLetterCause, EnqueueRequest, Payload, Priority, TraceContext
 
 # -- time helpers -----------------------------------------------------------
 

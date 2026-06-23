@@ -6,7 +6,6 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 
 import pytest
-from tests.conftest import VALID_TP
 
 from sepp import (
     EnqueueRequest,
@@ -18,6 +17,7 @@ from sepp import (
     TraceContext,
     TraceContextError,
 )
+from tests.conftest import VALID_TP
 
 # -- Priority ---------------------------------------------------------------
 

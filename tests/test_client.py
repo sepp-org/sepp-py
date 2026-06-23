@@ -6,7 +6,6 @@ from datetime import datetime, timedelta, timezone
 
 import grpc
 import pytest
-from tests.conftest import VALID_UUID, FakeStub, FakeUnaryUnary, make_client, rpc_error
 
 from sepp import errors
 from sepp._pb import queue_pb2 as pb
@@ -18,6 +17,7 @@ from sepp.client import (
     _normalize_target,
 )
 from sepp.types import EnqueueRequest, ReserveOptions
+from tests.conftest import VALID_UUID, FakeStub, FakeUnaryUnary, make_client, rpc_error
 
 FAST_RETRY = RetryPolicy(
     max_attempts=5,

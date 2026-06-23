@@ -6,10 +6,10 @@ from datetime import timedelta
 
 import grpc
 import pytest
-from tests.conftest import rpc_error
 
 from sepp import errors
 from sepp.client import RetryDirective, RetryPolicy
+from tests.conftest import rpc_error
 
 
 @pytest.mark.parametrize(
