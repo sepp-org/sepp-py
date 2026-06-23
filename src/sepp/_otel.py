@@ -204,7 +204,7 @@ _SEVERITY_NUMBER: dict[int, int] = {
 }
 
 
-def _emit_span_event(level: int, msg: str, args: tuple) -> None:
+def _emit_span_event(level: int, msg: str, args: tuple[object, ...]) -> None:
     """Record a log event on the active span, if any."""
     if not OTEL_AVAILABLE:
         return

@@ -709,9 +709,7 @@ async def test_lease_extend() -> None:
 
     stub = FakeStub()
     new_expiry = datetime(1970, 1, 1, tzinfo=timezone.utc) + timedelta(milliseconds=60000)
-    stub.Extend = FakeUnaryUnary(
-        pb.ExtendResponse(job_id="job-1", lease_expires_at=new_expiry)
-    )
+    stub.Extend = FakeUnaryUnary(pb.ExtendResponse(job_id="job-1", lease_expires_at=new_expiry))
     client = make_client(stub)
     lease = Lease(
         client,

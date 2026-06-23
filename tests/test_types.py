@@ -239,5 +239,3 @@ def test_reserve_options_negative_lease() -> None:
 def test_enqueue_request_bool_priority_raises() -> None:
     with pytest.raises(PriorityOutOfRangeError):
         EnqueueRequest("q", "t", priority=True)  # type: ignore[arg-type]
-
-

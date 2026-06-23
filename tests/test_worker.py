@@ -423,11 +423,13 @@ def _raise_after_call(exc: Exception) -> object:
 
 async def test_max_in_flight_bounds_concurrency() -> None:
     client = FakeClient([])
-    client._batches = [[
-        make_job(client, "t"),
-        make_job(client, "t", "j2"),
-        make_job(client, "t", "j3"),
-    ]]
+    client._batches = [
+        [
+            make_job(client, "t"),
+            make_job(client, "t", "j2"),
+            make_job(client, "t", "j3"),
+        ]
+    ]
     max_concurrent = 0
     current = 0
     lock = asyncio.Lock()

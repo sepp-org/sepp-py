@@ -75,11 +75,13 @@ async def test_enqueue_rejection_invalid_queue(client: SeppClient) -> None:
 
 
 async def test_enqueue_batch(client: SeppClient) -> None:
-    results = await client.enqueue_batch([
-        EnqueueRequest("q-batch-1", "test"),
-        EnqueueRequest("q-batch-1", "test"),
-        EnqueueRequest("q-batch-1", "test"),
-    ])
+    results = await client.enqueue_batch(
+        [
+            EnqueueRequest("q-batch-1", "test"),
+            EnqueueRequest("q-batch-1", "test"),
+            EnqueueRequest("q-batch-1", "test"),
+        ]
+    )
     assert len(results) == 3
     for r in results:
         assert isinstance(r, EnqueueAck)  # type: ignore[arg-type]
@@ -90,10 +92,12 @@ async def test_enqueue_batch(client: SeppClient) -> None:
 
 
 async def test_enqueue_atomic(client: SeppClient) -> None:
-    acks = await client.enqueue_atomic([
-        EnqueueRequest("q-atomic-1", "test"),
-        EnqueueRequest("q-atomic-1", "test"),
-    ])
+    acks = await client.enqueue_atomic(
+        [
+            EnqueueRequest("q-atomic-1", "test"),
+            EnqueueRequest("q-atomic-1", "test"),
+        ]
+    )
     assert len(acks) == 2
     assert acks[0].job_id != acks[1].job_id
 
@@ -102,12 +106,8 @@ async def test_enqueue_atomic(client: SeppClient) -> None:
 
 
 async def test_idempotency_same_key_returns_same_id(client: SeppClient) -> None:
-    ack1 = await client.enqueue(
-        EnqueueRequest("q-idem-1", "test", idempotency_key="key-42")
-    )
-    ack2 = await client.enqueue(
-        EnqueueRequest("q-idem-1", "test", idempotency_key="key-42")
-    )
+    ack1 = await client.enqueue(EnqueueRequest("q-idem-1", "test", idempotency_key="key-42"))
+    ack2 = await client.enqueue(EnqueueRequest("q-idem-1", "test", idempotency_key="key-42"))
     assert ack2.job_id == ack1.job_id
     assert ack2.deduplicated is True
 
@@ -130,9 +130,7 @@ async def test_enqueue_reserve_ack(client: SeppClient) -> None:
         EnqueueRequest("q-cycle-1", "greet", payload=Payload(b"{}", "application/json"))
     )
     jobs = await client.reserve(
-        ReserveOptions(
-            ["q-cycle-1"], timedelta(seconds=10), wait_timeout=timedelta(seconds=5)
-        )
+        ReserveOptions(["q-cycle-1"], timedelta(seconds=10), wait_timeout=timedelta(seconds=5))
     )
     assert jobs is not None and len(jobs) == 1
     job = jobs[0]
@@ -148,9 +146,7 @@ async def test_enqueue_reserve_ack(client: SeppClient) -> None:
 async def test_nack_retry_then_ack(client: SeppClient) -> None:
     await client.enqueue(EnqueueRequest("q-nack-1", "retry-me"))
     jobs = await client.reserve(
-        ReserveOptions(
-            ["q-nack-1"], timedelta(seconds=10), wait_timeout=timedelta(seconds=5)
-        )
+        ReserveOptions(["q-nack-1"], timedelta(seconds=10), wait_timeout=timedelta(seconds=5))
     )
     assert jobs is not None
     ctx = jobs[0].ctx
@@ -160,9 +156,7 @@ async def test_nack_retry_then_ack(client: SeppClient) -> None:
     assert dead is False
 
     jobs2 = await client.reserve(
-        ReserveOptions(
-            ["q-nack-1"], timedelta(seconds=10), wait_timeout=timedelta(seconds=5)
-        )
+        ReserveOptions(["q-nack-1"], timedelta(seconds=10), wait_timeout=timedelta(seconds=5))
     )
     assert jobs2 is not None
     ctx2 = jobs2[0].ctx
@@ -177,9 +171,7 @@ async def test_nack_retry_then_ack(client: SeppClient) -> None:
 async def test_nack_dead_letter(client: SeppClient) -> None:
     await client.enqueue(EnqueueRequest("q-dl-1", "dl-me", max_attempts=1))
     jobs = await client.reserve(
-        ReserveOptions(
-            ["q-dl-1"], timedelta(seconds=10), wait_timeout=timedelta(seconds=5)
-        )
+        ReserveOptions(["q-dl-1"], timedelta(seconds=10), wait_timeout=timedelta(seconds=5))
     )
     assert jobs is not None
     ctx = jobs[0].ctx
@@ -187,9 +179,7 @@ async def test_nack_dead_letter(client: SeppClient) -> None:
     assert dead is True
 
     jobs2 = await client.reserve(
-        ReserveOptions(
-            ["q-dl-1"], timedelta(seconds=10), wait_timeout=timedelta(seconds=2)
-        )
+        ReserveOptions(["q-dl-1"], timedelta(seconds=10), wait_timeout=timedelta(seconds=2))
     )
     assert jobs2 is None
 
@@ -200,9 +190,7 @@ async def test_nack_dead_letter(client: SeppClient) -> None:
 async def test_extend_lease(client: SeppClient) -> None:
     await client.enqueue(EnqueueRequest("q-ext-1", "long-job"))
     jobs = await client.reserve(
-        ReserveOptions(
-            ["q-ext-1"], timedelta(seconds=2), wait_timeout=timedelta(seconds=5)
-        )
+        ReserveOptions(["q-ext-1"], timedelta(seconds=2), wait_timeout=timedelta(seconds=5))
     )
     assert jobs is not None
     ctx = jobs[0].ctx
@@ -219,13 +207,9 @@ async def test_trace_context_roundtrip(client: SeppClient) -> None:
     from sepp import TraceContext
 
     tc = TraceContext("00-0123456789abcdef0123456789abcdef-0123456789abcdef-01")
-    await client.enqueue(
-        EnqueueRequest("q-tc-1", "traced", trace_context=tc)
-    )
+    await client.enqueue(EnqueueRequest("q-tc-1", "traced", trace_context=tc))
     jobs = await client.reserve(
-        ReserveOptions(
-            ["q-tc-1"], timedelta(seconds=10), wait_timeout=timedelta(seconds=5)
-        )
+        ReserveOptions(["q-tc-1"], timedelta(seconds=10), wait_timeout=timedelta(seconds=5))
     )
     assert jobs is not None
     ctx = jobs[0].ctx
