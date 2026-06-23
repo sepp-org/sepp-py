@@ -44,7 +44,7 @@ Protocol = "https://github.com/sepp-org/proto"
 
 [dependency-groups]
 dev = [
-    "mypy>=1.11",
+    "mypy>=2.1.0",
     "pytest>=8.0",
     "pytest-asyncio>=0.24",
     "ruff>=0.15.18",
