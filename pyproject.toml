@@ -50,6 +50,7 @@ dev = [
     "ruff>=0.6",
     # exercised by examples/traced.py
     "opentelemetry-exporter-otlp-proto-grpc>=1.20",
+    "testcontainers>=4.14.2",
 ]
 
 [tool.hatch.build.targets.wheel]
