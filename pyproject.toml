@@ -34,8 +34,8 @@ dependencies = [
 # Mirrors the Rust client's default-on `opentelemetry` feature: spans, metrics,
 # and W3C trace-context propagation from producer to worker.
 otel = [
-    "opentelemetry-api>=1.42.1",
-    "opentelemetry-sdk>=1.42.1",
+    "opentelemetry-api>=1.43.0",
+    "opentelemetry-sdk>=1.43.0",
 ]
 
 [project.urls]
