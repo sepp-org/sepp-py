@@ -40,6 +40,8 @@ otel = [
 
 [project.urls]
 Homepage = "https://github.com/sepp-org/sepp"
+Repository = "https://github.com/sepp-org/sepp-py"
+Issues = "https://github.com/sepp-org/sepp-py/issues"
 Protocol = "https://github.com/sepp-org/proto"
 
 [dependency-groups]

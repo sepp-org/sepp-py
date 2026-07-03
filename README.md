@@ -1,22 +1,45 @@
-# sepp-py
+<div align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/sepp-org/sepp-py/HEAD/media/sepp-python-paper-200.png">
+    <img alt="sepp-py" src="https://raw.githubusercontent.com/sepp-org/sepp-py/HEAD/media/sepp-python-ink-200.png" width="128" height="128">
+  </picture>
 
-An **async Python client** for the [sepp](https://github.com/sepp-org/sepp)
-durable job queue. It mirrors the [Rust client](https://github.com/sepp-org/sepp-rs)'s
-API, adapted to Python idioms (required fields positional, optional fields as
-keyword arguments, results as dataclasses).
+  <h1>sepp-py</h1>
 
-It provides both halves of the job queue API:
+  <p>
+    <strong>The official Python client for <a href="https://github.com/sepp-org/sepp">sepp</a>,</strong>
+    <br/>
+    a small, language-agnostic durable job queue.
+  </p>
 
-- **Producers** enqueue jobs with a `SeppClient` — one at a time, in best-effort
-  batches, or atomic batches.
-- **Consumers** reserve jobs and report their outcome. The low-level
-  `reserve` / `ack` / `nack` / `extend` calls give full manual control, while
-  the high-level `Worker` runs the whole reserve → process → ack loop for you
-  with bounded concurrency, lease auto-extension, graceful shutdown, and
-  metrics.
+  <p>
+    <a href="https://github.com/sepp-org/sepp-py/actions"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/sepp-org/sepp-py/ci.yml?branch=master&labelColor=181512"></a>
+    <a href="https://pypi.org/project/sepp/"><img alt="PyPI" src="https://img.shields.io/pypi/v/sepp?labelColor=181512"></a>
+    <a href="https://pypi.org/project/sepp/"><img alt="Python versions" src="https://img.shields.io/pypi/pyversions/sepp?labelColor=181512"></a>
+    <a href="LICENSE"><img alt="license" src="https://img.shields.io/pypi/l/sepp?color=ec6a2e&labelColor=181512"></a>
+  </p>
 
-The client is built on [`grpc.aio`](https://grpc.github.io/grpc/python/grpc_asyncio.html)
-and is **async only**; run it under `asyncio`.
+  <p>
+    <a href="https://pypi.org/project/sepp/">PyPI</a>
+    ·
+    <a href="https://sepp-org.github.io/sepp/docs/">sepp docs</a>
+    ·
+    <a href="https://buf.build/sepp-org/sepp-proto/docs/main%3Asepp.v1">Protocol</a>
+    ·
+    <a href="https://github.com/sepp-org/sepp-py/issues">Issues</a>
+  </p>
+</div>
+
+## Functionality
+
+- **Producers** — enqueue jobs one at a time, in best-effort batches, or atomically. Supports idempotency keys, priorities, scheduled delivery and custom metadata.
+- **Consumers** — a high-level `Worker` runs the whole reserve → process → ack loop for you with bounded concurrency, automatic lease extension and graceful shutdown, or drop down to the raw `reserve` / `ack` / `nack` / `extend` calls for full control.
+- **Observability** — with the `otel` extra, the client emits spans and worker metrics and propagates W3C trace context from the producer's enqueue span to the worker's process span. The host application owns the exporter.
+- **Typed errors** — deterministic server rejections (payload too large, unknown queue, …) are separate from transient transport errors, so retry logic stays simple.
+
+The client is built on
+[`grpc.aio`](https://grpc.github.io/grpc/python/grpc_asyncio.html) and is
+**async only**; run it under `asyncio`.
 
 ## Install
 
@@ -29,7 +52,7 @@ Requires Python 3.10+.
 
 ## Quickstart
 
-Enqueue a job, then run a worker that processes it:
+Enqueue a job, then run a worker that processes it (requires a running [sepp server](https://github.com/sepp-org/sepp)):
 
 ```python
 import asyncio
@@ -64,6 +87,10 @@ async def main() -> None:
 
 asyncio.run(main())
 ```
+
+Runnable versions live in [`examples/`](examples/), including
+[`traced.py`](examples/traced.py) which wires up an OTLP exporter for
+end-to-end distributed tracing.
 
 ## Concepts
 
@@ -260,3 +287,12 @@ uv run ruff check . && uv run mypy
 The wire contract is vendored under [`proto/queue.proto`](proto/queue.proto) and
 the generated stubs are committed under `src/sepp/_pb/`, so installing the
 package needs no `protoc`. See the proto file's header for provenance.
+
+## Docs
+
+This README is the client's usage documentation. For running and configuring
+the sepp server itself, see the [sepp docs site](https://sepp-org.github.io/sepp/docs/).
+
+## License
+
+sepp-py is licensed under the MIT License. See [LICENSE](LICENSE) for details.
