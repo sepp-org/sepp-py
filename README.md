@@ -14,13 +14,13 @@
 
   <p>
     <a href="https://github.com/sepp-org/sepp-py/actions"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/sepp-org/sepp-py/ci.yml?branch=master&labelColor=181512"></a>
-    <a href="https://pypi.org/project/sepp/"><img alt="PyPI" src="https://img.shields.io/pypi/v/sepp?labelColor=181512"></a>
-    <a href="https://pypi.org/project/sepp/"><img alt="Python versions" src="https://img.shields.io/pypi/pyversions/sepp?labelColor=181512"></a>
-    <a href="LICENSE"><img alt="license" src="https://img.shields.io/pypi/l/sepp?color=ec6a2e&labelColor=181512"></a>
+    <a href="https://pypi.org/project/sepp-py/"><img alt="PyPI" src="https://img.shields.io/pypi/v/sepp-py?labelColor=181512"></a>
+    <a href="https://pypi.org/project/sepp-py/"><img alt="Python versions" src="https://img.shields.io/pypi/pyversions/sepp-py?labelColor=181512"></a>
+    <a href="LICENSE"><img alt="license" src="https://img.shields.io/pypi/l/sepp-py?color=ec6a2e&labelColor=181512"></a>
   </p>
 
   <p>
-    <a href="https://pypi.org/project/sepp/">PyPI</a>
+    <a href="https://pypi.org/project/sepp-py/">PyPI</a>
     ·
     <a href="https://sepp-org.github.io/sepp/docs/">sepp docs</a>
     ·
@@ -44,8 +44,8 @@ The client is built on
 ## Install
 
 ```sh
-pip install sepp            # or: uv add sepp
-pip install "sepp[otel]"    # with OpenTelemetry spans, metrics & trace propagation
+pip install sepp-py            # or: uv add sepp-py
+pip install "sepp-py[otel]"    # with OpenTelemetry spans, metrics & trace propagation
 ```
 
 Requires Python 3.10+.

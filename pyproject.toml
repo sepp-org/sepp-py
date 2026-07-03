@@ -3,7 +3,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "sepp"
+name = "sepp-py"
 version = "0.1.0"
 description = "An async Python client for the sepp durable job queue."
 readme = "README.md"
