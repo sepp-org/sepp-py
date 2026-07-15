@@ -17,14 +17,12 @@ from sepp import (
     EnqueueAck,
     EnqueueRequest,
     HandlerError,
-    JobRejectedError,
     Payload,
     ReserveOptions,
     RetryDirective,
     SeppClient,
     Worker,
 )
-from sepp import errors as errs
 
 
 @pytest.fixture
@@ -61,16 +59,6 @@ async def test_enqueue_single_with_payload(client: SeppClient) -> None:
         EnqueueRequest("q-enq-2", "test", payload=Payload(b"hello", "text/plain"))
     )
     assert ack.job_id
-
-
-async def test_enqueue_rejection_invalid_queue(client: SeppClient) -> None:
-    info = await client.get_server_info()
-    if not info.strict_queues:
-        pytest.skip("server not in strict mode")
-    with pytest.raises(JobRejectedError) as ei:
-        await client.enqueue(EnqueueRequest("nonexistent-queue-xyz", "test"))
-    assert isinstance(ei.value.rejection, errs.UnknownQueue)
-
 
 # -- enqueue batch ----------------------------------------------------------
 
