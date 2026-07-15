@@ -3,9 +3,9 @@ durable job queue.
 
 This client provides both halves of the job queue API:
 
-* **Producers** enqueue jobs with a :class:`~sepp.client.SeppClient` — one at a
+* Producers enqueue jobs with a :class:`~sepp.client.SeppClient` — one at a
   time, in best-effort batches, or atomic batches.
-* **Consumers** reserve jobs and report their outcome. The low-level
+* Consumers reserve jobs and report their outcome. The low-level
   :meth:`~sepp.client.SeppClient.reserve` / :meth:`~sepp.client.SeppClient.ack`
   / :meth:`~sepp.client.SeppClient.nack` calls give full manual control, while
   the high-level :class:`~sepp.worker.Worker` runs the whole
@@ -107,7 +107,7 @@ try:
     from importlib.metadata import PackageNotFoundError, version
 
     try:
-        __version__ = version("sepp")
+        __version__ = version("sepp-py")
     except PackageNotFoundError:  # pragma: no cover
         __version__ = "0.1.0"
 except ImportError:  # pragma: no cover

@@ -1,8 +1,5 @@
 """Exceptions and rejection types for the sepp client.
 
-The hierarchy mirrors the Rust client's error enums, mapped onto Python
-exceptions:
-
 * :class:`ClientError` and its subclasses cover transport/protocol failures,
   shared by most RPCs.
 * :class:`JobRejection` (and its variants) is a *value*, not an exception: it
@@ -220,7 +217,7 @@ class UnknownQueue(JobRejection):
 
 @dataclass(frozen=True)
 class PayloadTooLarge(JobRejection):
-    """The payload exceeds the queue's ``max_payload_size``."""
+    """The payload exceeds the queue's ``max_payload_bytes``."""
 
     limit: int
     actual: int
@@ -477,12 +474,19 @@ _TRANSPORT_CODES = frozenset(
 )
 
 # Codes worth retrying. CANCELLED is treated as a transport error but is *not*
-# retried (it usually means the caller went away), matching the Rust client.
+# retried (it usually means the caller went away).
 RETRYABLE_CODES = frozenset(
     {
         grpc.StatusCode.UNAVAILABLE,
         grpc.StatusCode.DEADLINE_EXCEEDED,
         grpc.StatusCode.ABORTED,
+        grpc.StatusCode.RESOURCE_EXHAUSTED,
+    }
+)
+
+KEYLESS_ENQUEUE_RETRYABLE_CODES = frozenset(
+    {
+        grpc.StatusCode.UNAVAILABLE,
         grpc.StatusCode.RESOURCE_EXHAUSTED,
     }
 )

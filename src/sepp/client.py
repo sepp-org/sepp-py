@@ -50,7 +50,7 @@ try:
     from importlib.metadata import PackageNotFoundError, version
 
     try:
-        _VERSION = version("sepp")
+        _VERSION = version("sepp-py")
     except PackageNotFoundError:
         _VERSION = "0.1.0"
 except ImportError:  # pragma: no cover
@@ -68,13 +68,18 @@ _CHANNEL_OPTIONS = [
 
 @dataclass
 class RetryPolicy:
-    """Backoff policy for retrying *transient* RPC failures (those mapped to
-    :class:`~sepp.errors.TransportError` / :class:`~sepp.errors.OverloadedError`).
+    """Backoff policy for retrying *transient* RPC failures (``UNAVAILABLE``,
+    ``DEADLINE_EXCEEDED``, ``ABORTED``, ``RESOURCE_EXHAUSTED``).
 
     Applies to enqueue, ack, nack, extend, and get-server-info — but not to
     :meth:`SeppClient.reserve`, which is a long poll. The default policy
     performs **no** retries (``max_attempts == 1``); opt in by passing a
     configured policy to :meth:`SeppClient.connect`.
+
+    A retried enqueue can duplicate jobs that carry no idempotency key, so when
+    any job in an enqueue lacks one, the ambiguous codes ``DEADLINE_EXCEEDED``
+    and ``ABORTED`` (the request may already have committed server-side) are
+    not retried for that call.
     """
 
     max_attempts: int = 1
@@ -129,7 +134,7 @@ RetryDirective.DEAD_LETTER = RetryDirective.dead_letter()
 class Lease:
     """Internal handle to a reserved job's lease, used to renew it.
 
-    Attached to a :class:`~sepp.types.JobCtx` by the conversion layer; not
+    Attached to the :class:`~sepp.types.JobCtx` of every reserved job; not
     constructed directly.
     """
 
@@ -302,7 +307,10 @@ class SeppClient:
         for an accepted job or a :class:`~sepp.errors.JobRejection` for a
         per-job refusal. Whole-call failures (empty batch, transport error,
         protocol violation) raise a :class:`~sepp.errors.ClientError`. Transient
-        failures are retried per the client's :class:`RetryPolicy`.
+        failures are retried per the client's :class:`RetryPolicy`; a retried
+        enqueue can duplicate jobs that carry no idempotency key, so when any
+        job lacks one the ambiguous ``DEADLINE_EXCEEDED`` / ``ABORTED`` codes
+        are not retried.
 
         For all-or-nothing semantics, use :meth:`enqueue_atomic`.
         """
@@ -319,6 +327,7 @@ class SeppClient:
                     lambda: self._stub.EnqueueBatch(
                         req, timeout=self._rpc_timeout, metadata=self._call_metadata()
                     ),
+                    retryable_codes=_enqueue_retryable_codes(pb_jobs),
                 )
             except grpc.aio.AioRpcError as err:
                 raise errors.client_error_from_rpc(err) from err
@@ -342,6 +351,8 @@ class SeppClient:
 
         A convenience wrapper over :meth:`enqueue_batch` that raises
         :class:`~sepp.errors.JobRejectedError` if the server rejects the job.
+        As with :meth:`enqueue_batch`, a retried enqueue can duplicate a job
+        that carries no idempotency key.
         """
         results = await self.enqueue_batch([job])
         result = results[0]
@@ -354,7 +365,10 @@ class SeppClient:
 
         On success returns one :class:`EnqueueAck` per job, in order. If any job
         fails validation, nothing is enqueued and every failure is raised
-        together as :class:`~sepp.errors.BatchValidationError`.
+        together as :class:`~sepp.errors.BatchValidationError`. As with
+        :meth:`enqueue_batch`, a retried enqueue can duplicate jobs that carry
+        no idempotency key, so when any job lacks one the ambiguous
+        ``DEADLINE_EXCEEDED`` / ``ABORTED`` codes are not retried.
         """
         pb_jobs = [_convert.enqueue_request_to_pb(j) for j in jobs]
         if not pb_jobs:
@@ -369,6 +383,7 @@ class SeppClient:
                     lambda: self._stub.EnqueueAtomic(
                         req, timeout=self._rpc_timeout, metadata=self._call_metadata()
                     ),
+                    retryable_codes=_enqueue_retryable_codes(pb_jobs),
                 )
             except grpc.aio.AioRpcError as err:
                 raise errors.client_error_from_rpc(err) from err
@@ -465,7 +480,11 @@ class SeppClient:
         else:
             nack_retry.default.SetInParent()
 
-        req = pb.NackRequest(job_id=ctx.id, attempt=ctx.attempt, reason=reason)
+        req = pb.NackRequest(job_id=ctx.id, attempt=ctx.attempt)
+        if reason:
+            # An unspecified reason stays absent on the wire; a present-but-empty
+            # "" would read as a worker having reported an empty reason.
+            req.reason = reason
         req.retry.CopyFrom(nack_retry)
         worker_id = ctx._lease.worker_id if ctx._lease else None
         if worker_id is not None:
@@ -590,7 +609,12 @@ class SeppClient:
             if tracestate:
                 job.trace_context.tracestate = tracestate
 
-    async def _with_retry(self, operation: str, factory: Callable[[], Awaitable[_T]]) -> _T:
+    async def _with_retry(
+        self,
+        operation: str,
+        factory: Callable[[], Awaitable[_T]],
+        retryable_codes: frozenset[grpc.StatusCode] = errors.RETRYABLE_CODES,
+    ) -> _T:
         import asyncio
 
         policy = self._retry_policy
@@ -600,7 +624,7 @@ class SeppClient:
             try:
                 return await factory()
             except grpc.aio.AioRpcError as err:
-                retryable = err.code() in errors.RETRYABLE_CODES
+                retryable = err.code() in retryable_codes
                 if attempt >= policy.max_attempts or not retryable:
                     raise
                 delay = backoff.total_seconds()
@@ -622,6 +646,16 @@ class SeppClient:
                     )
                 )
                 attempt += 1
+
+
+def _enqueue_retryable_codes(pb_jobs: list[pb.EnqueueRequest]) -> frozenset[grpc.StatusCode]:
+    """The retryable codes for an enqueue over ``pb_jobs``: when every job
+    carries an idempotency key the server dedupes retries, so the full set
+    applies; otherwise the ambiguous-commit codes are excluded (see
+    :data:`~sepp.errors.KEYLESS_ENQUEUE_RETRYABLE_CODES`)."""
+    if all(j.HasField("idempotency_key") for j in pb_jobs):
+        return errors.RETRYABLE_CODES
+    return errors.KEYLESS_ENQUEUE_RETRYABLE_CODES
 
 
 def _normalize_target(addr: str) -> tuple[str, bool]:

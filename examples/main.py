@@ -29,7 +29,7 @@ async def main() -> None:
     ack = await client.enqueue(
         EnqueueRequest(QUEUE, JOB_TYPE, payload=Payload(b"hello, sepp", "text/plain"))
     )
-    print(f"enqueued job {ack.job_id} (deduplicated={ack.deduplicated})")
+    print(f"enqueued job {ack.job_id}")
 
     # 2. Launch a worker. The handler signals the job id over a future so the
     #    example can finish instead of looping in `run` forever.
@@ -46,13 +46,14 @@ async def main() -> None:
     worker_task = asyncio.create_task(worker.run())
 
     # 3. Wait for the job to be processed, with a timeout, then shut down.
+    #    shutdown() stops new reservations; awaiting `run` then drains what is
+    #    in flight (including this job's ack) before returning.
     try:
         job_id = await asyncio.wait_for(asyncio.shield(done), timeout=15)
-        # Give the worker a moment to ack before tearing it down.
-        await asyncio.sleep(0.5)
         print(f"roundtrip OK — job {job_id} was enqueued and processed")
     except asyncio.TimeoutError:
         print("timed out waiting for the job to be processed")
+        raise SystemExit(1) from None
     finally:
         worker.shutdown_handle().shutdown()
         await worker_task

@@ -3,14 +3,15 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from datetime import datetime, timedelta, timezone
 
 import pytest
 
 from sepp import _convert, errors
-from sepp._pb import queue_pb2 as pb
 from sepp.client import RetryDirective
-from sepp.types import Job
+from sepp.types import Job, ReserveOptions
+from sepp.v1 import queue_pb2 as pb
 from sepp.worker import (
     DuplicateHandlerError,
     HandlerError,
@@ -25,15 +26,23 @@ class FakeClient:
     """A SeppClient stand-in for driving the worker without a network."""
 
     def __init__(
-        self, batches: list[list[Job] | None], extend_error: Exception | None = None
+        self,
+        batches: list[list[Job] | None],
+        extend_error: Exception | None = None,
+        extend_errors: list[Exception] | None = None,
     ) -> None:
         self._batches = list(batches)
         self.acked: list[str] = []
         self.nacked: list[tuple[str, RetryDirective, str]] = []
         self.extends = 0
+        self.reserve_opts: list[ReserveOptions] = []
         self._extend_error = extend_error
+        # One-shot errors, raised in order before falling back to success (or
+        # to `extend_error`, which is raised on *every* call).
+        self._extend_errors = list(extend_errors or [])
 
-    async def reserve(self, opts: object) -> list[Job] | None:
+    async def reserve(self, opts: ReserveOptions) -> list[Job] | None:
+        self.reserve_opts.append(opts)
         if self._batches:
             return self._batches.pop(0)
         await asyncio.sleep(0.005)  # idle: yield without busy-spinning
@@ -52,6 +61,8 @@ class FakeClient:
         self, job_id: str, attempt: int, extension: timedelta, worker_id: str | None
     ) -> datetime:
         self.extends += 1
+        if self._extend_errors:
+            raise self._extend_errors.pop(0)
         if self._extend_error is not None:
             raise self._extend_error
         return datetime.now(timezone.utc) + extension
@@ -84,7 +95,7 @@ async def drive(worker: Worker, ready: asyncio.Event, timeout: float = 2.0) -> N
 
 
 async def test_processes_and_acks() -> None:
-    client = FakeClient([[None]])  # placeholder, replaced below
+    client = FakeClient([])
     job = make_job(client, "t")
     client._batches = [[job]]
     ready = asyncio.Event()
@@ -231,6 +242,55 @@ async def test_graceful_shutdown_drains_in_flight() -> None:
     assert client.acked == [VALID_UUID]  # the job was acked during drain
 
 
+# -- cancellation safety ----------------------------------------------------
+
+
+def _leaked_tasks() -> set[asyncio.Task[object]]:
+    return {t for t in asyncio.all_tasks() if t is not asyncio.current_task()}
+
+
+async def test_cancelling_run_reaps_pending_reserve() -> None:
+    # Cancelling run() (rather than using the ShutdownHandle) must not leak the
+    # in-flight reserve long-poll or the internal shutdown-wait task.
+    client = FakeClient([])
+    blocked = asyncio.Event()
+
+    async def blocking_reserve(opts: object) -> list[Job] | None:
+        await blocked.wait()  # a long poll that never returns
+        return None
+
+    client.reserve = blocking_reserve  # type: ignore[method-assign]
+    worker = Worker(client, ["q"], timedelta(seconds=30))  # type: ignore[arg-type]
+
+    with pytest.raises(asyncio.TimeoutError):
+        await asyncio.wait_for(worker.run(), timeout=0.1)
+
+    assert _leaked_tasks() == set()
+
+
+async def test_cancelling_run_reaps_in_flight_job_tasks() -> None:
+    client = FakeClient([])
+    client._batches = [[make_job(client, "t")]]
+    started = asyncio.Event()
+    worker = Worker(client, ["q"], timedelta(seconds=30))  # type: ignore[arg-type]
+
+    @worker.handler("t")
+    async def handle(payload: object, ctx: object) -> None:
+        started.set()
+        await asyncio.Event().wait()  # hung handler: cancellation is the only escape
+
+    task = asyncio.create_task(worker.run())
+    await asyncio.wait_for(started.wait(), 2.0)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert _leaked_tasks() == set()
+    # The abandoned job is left to lease expiry: neither acked nor nacked.
+    assert client.acked == []
+    assert client.nacked == []
+
+
 # -- auto-extend ------------------------------------------------------------
 
 
@@ -315,6 +375,101 @@ async def test_auto_extend_lease_lost_authoritative_when_handler_swallows_cancel
     assert client.nacked == []
 
 
+async def test_auto_extend_abort_on_job_not_found() -> None:
+    # JobNotFound on extend is the other lease-reassigned signal: the handler
+    # is aborted and the job neither acked nor nacked.
+    client = FakeClient([], extend_error=errors.JobNotFoundError())
+    client._batches = [[make_job(client, "t")]]
+    aborted = asyncio.Event()
+    worker = Worker(
+        client,  # type: ignore[arg-type]
+        ["q"],
+        timedelta(milliseconds=30),
+        auto_extend=True,
+        auto_extend_interval=timedelta(milliseconds=10),
+    )
+
+    @worker.handler("t")
+    async def handle(payload, ctx):
+        try:
+            await asyncio.sleep(1.0)
+        except asyncio.CancelledError:
+            aborted.set()
+            raise
+
+    task = asyncio.create_task(worker.run())
+    await asyncio.wait_for(aborted.wait(), 2.0)
+    worker.shutdown_handle().shutdown()
+    await asyncio.wait_for(task, 2.0)
+    assert client.acked == []
+    assert client.nacked == []
+
+
+async def test_heartbeat_transient_extend_failure_retries() -> None:
+    # A transient extend failure while the known lease is still valid is
+    # retried; the handler keeps running and the job is acked.
+    client = FakeClient([], extend_errors=[errors.TransportError("transient")])
+    client._batches = [[make_job(client, "t")]]  # lease expires in 60s
+    ready = asyncio.Event()
+    worker = Worker(
+        client,  # type: ignore[arg-type]
+        ["q"],
+        timedelta(seconds=60),
+        auto_extend=True,
+        auto_extend_interval=timedelta(milliseconds=10),
+    )
+
+    @worker.handler("t")
+    async def handle(payload, ctx):
+        await asyncio.sleep(0.05)  # spans several heartbeats
+        ready.set()
+
+    await drive(worker, ready)
+    assert client.extends >= 2  # the failed extend plus at least one retry
+    assert client.acked == [VALID_UUID]
+    assert client.nacked == []
+
+
+async def test_heartbeat_extend_failure_after_expiry_aborts_handler() -> None:
+    # A failing extend once the known lease has already expired must abort the
+    # handler and suppress ack/nack (another worker may own the job by now).
+    client = FakeClient([], extend_error=errors.TransportError("server down"))
+    j = pb.Job(
+        id=VALID_UUID,
+        job_type="t",
+        priority=1,
+        enqueued_at=datetime(1970, 1, 1, tzinfo=timezone.utc)
+        + timedelta(milliseconds=1_700_000_000_000),
+        attempt=1,
+        max_attempts=3,
+        lease_expires_at=datetime.now(timezone.utc) - timedelta(seconds=1),  # already past
+    )
+    client._batches = [[_convert.job_from_pb(client, j, "worker-1")]]  # type: ignore[arg-type]
+    aborted = asyncio.Event()
+    worker = Worker(
+        client,  # type: ignore[arg-type]
+        ["q"],
+        timedelta(milliseconds=30),
+        auto_extend=True,
+        auto_extend_interval=timedelta(milliseconds=10),
+    )
+
+    @worker.handler("t")
+    async def handle(payload, ctx):
+        try:
+            await asyncio.sleep(1.0)
+        except asyncio.CancelledError:
+            aborted.set()
+            raise
+
+    task = asyncio.create_task(worker.run())
+    await asyncio.wait_for(aborted.wait(), 2.0)
+    worker.shutdown_handle().shutdown()
+    await asyncio.wait_for(task, 2.0)
+    assert client.acked == []
+    assert client.nacked == []
+
+
 # -- helpers ----------------------------------------------------------------
 
 
@@ -389,26 +544,36 @@ async def test_dispose_ack_job_not_found_is_logged() -> None:
     # job not found on ack: logged, worker continues without crashing
 
 
-async def test_dispose_nack_sepp_error_is_logged() -> None:
+async def test_dispose_nack_sepp_error_is_logged(caplog: pytest.LogCaptureFixture) -> None:
     client = FakeClient([])
     client._batches = [[make_job(client, "t")]]
-    client.nack = _raise_after_call(errors.TransportError("nack failed"))  # type: ignore[method-assign]
+    nack_attempted = asyncio.Event()
+    nack_calls = 0
+
+    async def failing_nack(
+        ctx: object, retry: RetryDirective = RetryDirective.DEFAULT, reason: str = ""
+    ) -> bool:
+        nonlocal nack_calls
+        nack_calls += 1
+        nack_attempted.set()
+        raise errors.TransportError("nack failed")
+
+    client.nack = failing_nack  # type: ignore[method-assign]
     worker = Worker(client, ["q"], timedelta(seconds=30))  # type: ignore[arg-type]
 
     @worker.handler("t")
     async def handle(payload: object, ctx: object) -> None:
         raise HandlerError.retry("expected failure")
 
-    ready_sig = asyncio.Event()
-
-    @worker.handler("s")
-    async def handle_s(payload: object, ctx: object) -> None:
-        ready_sig.set()
-
     task = asyncio.create_task(worker.run())
-    await asyncio.sleep(0.1)
+    with caplog.at_level(logging.ERROR, logger="sepp"):
+        await asyncio.wait_for(nack_attempted.wait(), 2.0)
+        await asyncio.sleep(0.02)  # let _dispose log the failure
+    assert not task.done()  # the failed nack must not crash the worker
     worker.shutdown_handle().shutdown()
     await asyncio.wait_for(task, 2.0)
+    assert nack_calls == 1
+    assert "failed to ack/nack" in caplog.text
 
 
 def _raise_after_call(exc: Exception) -> object:
@@ -467,6 +632,76 @@ async def test_max_in_flight_bounds_concurrency() -> None:
     worker.shutdown_handle().shutdown()
     await asyncio.wait_for(task, 2.0)
     assert max_concurrent <= 2
+
+
+# -- reserve options sent to the client --------------------------------------
+
+
+async def test_reserve_requests_free_capacity() -> None:
+    # The worker asks for max_in_flight jobs when idle, and only for the free
+    # capacity while jobs are held in flight — this is what keeps a reserved
+    # batch from over-subscribing the semaphore.
+    client = FakeClient([])
+    client._batches = [
+        [
+            make_job(client, "t"),
+            make_job(client, "t", "j2"),
+            make_job(client, "t", "j3"),
+        ]
+    ]
+    entered = 0
+    all_in = asyncio.Event()
+    release = asyncio.Event()
+    worker = Worker(
+        client,  # type: ignore[arg-type]
+        ["q"],
+        timedelta(seconds=30),
+        wait_timeout=timedelta(seconds=7),
+        max_in_flight=4,
+    )
+
+    @worker.handler("t")
+    async def handle(payload: object, ctx: object) -> None:
+        nonlocal entered
+        entered += 1
+        if entered == 3:
+            all_in.set()
+        await release.wait()
+
+    task = asyncio.create_task(worker.run())
+    await asyncio.wait_for(all_in.wait(), 2.0)
+    for _ in range(200):  # wait for the next reserve, issued with 3 in flight
+        if len(client.reserve_opts) >= 2:
+            break
+        await asyncio.sleep(0.005)
+    release.set()
+    worker.shutdown_handle().shutdown()
+    await asyncio.wait_for(task, 2.0)
+
+    first, second = client.reserve_opts[0], client.reserve_opts[1]
+    assert first.max_jobs == 4  # idle: the full capacity
+    assert first.wait_timeout == timedelta(seconds=7)  # passes through
+    assert list(first.queues) == ["q"]
+    assert second.max_jobs == 1  # 3 of 4 slots taken
+
+
+async def test_reserve_constructor_max_jobs_caps_below_capacity() -> None:
+    client = FakeClient([])
+    worker = Worker(
+        client,  # type: ignore[arg-type]
+        ["q"],
+        timedelta(seconds=30),
+        max_jobs=2,
+        max_in_flight=8,
+    )
+    task = asyncio.create_task(worker.run())
+    for _ in range(200):
+        if client.reserve_opts:
+            break
+        await asyncio.sleep(0.005)
+    worker.shutdown_handle().shutdown()
+    await asyncio.wait_for(task, 2.0)
+    assert client.reserve_opts[0].max_jobs == 2  # the smaller of max_jobs/capacity
 
 
 # -- handler registration ---------------------------------------------------
@@ -544,3 +779,65 @@ async def test_worker_custom_worker_id() -> None:
     client = FakeClient([])
     worker = Worker(client, ["q"], timedelta(seconds=30), worker_id="custom-1")  # type: ignore[arg-type]
     assert worker._opts.worker_id == "custom-1"
+
+
+# -- wait_timeout validation --------------------------------------------------
+
+
+@pytest.mark.parametrize("wait", [timedelta(0), timedelta(seconds=-1)])
+def test_worker_non_positive_wait_timeout_raises(wait: timedelta) -> None:
+    client = FakeClient([])
+    with pytest.raises(ValueError, match="wait_timeout"):
+        Worker(client, ["q"], timedelta(seconds=30), wait_timeout=wait)  # type: ignore[arg-type]
+
+
+# -- early-empty reserve backoff ----------------------------------------------
+
+
+async def test_early_empty_reserve_backs_off() -> None:
+    # A reserve that answers empty immediately (e.g. a server draining at
+    # shutdown) must not be hammered: the loop sleeps briefly before re-polling.
+    client = FakeClient([])
+    calls = 0
+
+    async def instant_empty(opts: object) -> list[Job] | None:
+        nonlocal calls
+        calls += 1
+        return None
+
+    client.reserve = instant_empty  # type: ignore[method-assign]
+    worker = Worker(client, ["q"], timedelta(seconds=30))  # type: ignore[arg-type]
+    task = asyncio.create_task(worker.run())
+    await asyncio.sleep(0.3)
+    worker.shutdown_handle().shutdown()
+    await asyncio.wait_for(task, 2.0)
+    # ~one poll per 250ms backoff, with slack for scheduling; a hot loop would
+    # be in the thousands.
+    assert calls <= 4
+
+
+async def test_long_poll_empty_reserve_repolls_immediately() -> None:
+    # An empty reserve that spent roughly its whole wait window is a normal
+    # long-poll timeout and must re-poll without the early-empty backoff.
+    client = FakeClient([])
+    calls = 0
+
+    async def slow_empty(opts: object) -> list[Job] | None:
+        nonlocal calls
+        calls += 1
+        await asyncio.sleep(0.05)  # ≈ the requested wait window
+        return None
+
+    client.reserve = slow_empty  # type: ignore[method-assign]
+    worker = Worker(
+        client,  # type: ignore[arg-type]
+        ["q"],
+        timedelta(seconds=30),
+        wait_timeout=timedelta(milliseconds=50),
+    )
+    task = asyncio.create_task(worker.run())
+    await asyncio.sleep(0.3)
+    worker.shutdown_handle().shutdown()
+    await asyncio.wait_for(task, 2.0)
+    # With the 250ms backoff this window would fit at most ~1-2 polls.
+    assert calls >= 3

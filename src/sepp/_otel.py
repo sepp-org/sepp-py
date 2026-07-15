@@ -1,10 +1,8 @@
-"""Optional OpenTelemetry integration.
+"""Optional OpenTelemetry integration, installed via the ``otel`` extra.
 
-Installed via the ``otel`` extra. Mirrors the Rust client's default-on
-``opentelemetry`` feature: it opens client/consumer spans, propagates W3C trace
-context from the producer's enqueue span to the worker's process span, and
-exposes worker metrics. When OpenTelemetry is not installed, every entry point
-here degrades to a no-op so the core client stays dependency-light.
+Opens client/consumer spans, propagates W3C trace context from the producer's
+enqueue span to the worker's process span, and exposes worker metrics. When
+OpenTelemetry is not installed, every entry point here degrades to a no-op.
 
 The host application still owns the exporter/provider; this module only emits
 spans and metrics into whatever the host has configured (or the global no-op

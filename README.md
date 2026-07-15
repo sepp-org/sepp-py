@@ -32,10 +32,9 @@
 
 ## Functionality
 
-- **Producers** — enqueue jobs one at a time, in best-effort batches, or atomically. Supports idempotency keys, priorities, scheduled delivery and custom metadata.
-- **Consumers** — a high-level `Worker` runs the whole reserve → process → ack loop for you with bounded concurrency, automatic lease extension and graceful shutdown, or drop down to the raw `reserve` / `ack` / `nack` / `extend` calls for full control.
-- **Observability** — with the `otel` extra, the client emits spans and worker metrics and propagates W3C trace context from the producer's enqueue span to the worker's process span. The host application owns the exporter.
-- **Typed errors** — deterministic server rejections (payload too large, unknown queue, …) are separate from transient transport errors, so retry logic stays simple.
+- Enqueue jobs one at a time, in best-effort batches, or atomically, with idempotency keys, priorities, scheduled delivery and custom metadata.
+- A high-level `Worker` runs the whole reserve → process → ack loop for you with bounded concurrency, automatic lease extension and graceful shutdown, or drop down to the raw `reserve` / `ack` / `nack` / `extend` calls for full control.
+- With the `otel` extra, the client emits spans and worker metrics and propagates W3C trace context from the producer's enqueue span to the worker's process span. The host application owns the exporter.
 
 The client is built on
 [`grpc.aio`](https://grpc.github.io/grpc/python/grpc_asyncio.html) and is
@@ -94,17 +93,23 @@ end-to-end distributed tracing.
 
 ## Concepts
 
-**Queues and job types.** Every job is enqueued onto a named queue and tagged
+### Queues and job types
+
+Every job is enqueued onto a named queue and tagged
 with a `job_type`. Workers reserve from one or more queues and dispatch each job
 to the handler registered for its `job_type`.
 
-**`Payload`.** Every job can carry an opaque blob of bytes plus an encoding hint
+### Payload
+
+Every job can carry an opaque blob of bytes plus an encoding hint
 (`Payload(data, encoding)`). The queue never interprets the bytes; producers and
 workers agree on the encoding. For primitive key-value metadata, pass the
 `custom` mapping on `EnqueueRequest` instead (values may be `str`, `int`,
 `float`, or `bool`).
 
-**Leases and redelivery.** A reserved job is leased to the worker for a bounded
+### Leases and redelivery
+
+A reserved job is leased to the worker for a bounded
 duration. The worker must `ack`, `nack`, or `extend` the lease before it
 expires; otherwise the server redelivers the job (with `ctx.attempt`
 incremented) until `max_attempts` is reached and it is dead-lettered. The
@@ -248,6 +253,11 @@ client = await SeppClient.connect(
 
 `reserve` is a long poll and is never retried by this policy.
 
+A retried enqueue can duplicate jobs that carry no idempotency key, so when any
+job in an enqueue lacks one, the ambiguous `DEADLINE_EXCEEDED` and `ABORTED`
+failures (the request may already have committed server-side) are not retried
+for that call.
+
 ## Timeouts and message size
 
 Every unary RPC except `reserve` carries a deadline, 30 seconds by default;
@@ -278,15 +288,17 @@ emits into it. See [`examples/traced.py`](examples/traced.py).
 ## Development
 
 ```sh
-uv venv && uv pip install -e ".[otel]" pytest pytest-asyncio mypy ruff grpcio-tools
-buf generate                      # regenerate stubs under src/sepp/v1/ from the BSR
-uv run pytest                 # run the test suite
+uv sync --extra otel              # install locked deps, including the dev group
+uv run pytest                     # run the test suite (integration tests need Docker)
 uv run ruff check . && uv run mypy
+buf generate                      # regenerate stubs under src/sepp/v1/ from the BSR
 ```
 
-The wire contract is vendored under [`proto/queue.proto`](proto/queue.proto) and
-the generated stubs are committed under `src/sepp/_pb/`, so installing the
-package needs no `protoc`. See the proto file's header for provenance.
+The generated stubs (`queue_pb2.py`, `queue_pb2_grpc.py`) are committed under
+`src/sepp/v1/` and regenerated with `buf generate` from
+[`buf.build/sepp-org/sepp-proto`](https://buf.build/sepp-org/sepp-proto)
+(pinned to `v1.2.0` in `buf.gen.yaml`), so installing the package needs no
+`protoc`.
 
 ## Docs
 

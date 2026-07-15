@@ -8,7 +8,6 @@ import grpc
 import pytest
 
 from sepp import errors
-from sepp._pb import queue_pb2 as pb
 from sepp.client import (
     RetryDirective,
     RetryPolicy,
@@ -17,6 +16,7 @@ from sepp.client import (
     _normalize_target,
 )
 from sepp.types import EnqueueRequest, ReserveOptions
+from sepp.v1 import queue_pb2 as pb
 from tests.conftest import VALID_UUID, FakeStub, FakeUnaryUnary, make_client, rpc_error
 
 FAST_RETRY = RetryPolicy(
@@ -231,6 +231,17 @@ async def test_nack_default_directive() -> None:
     assert req.retry.WhichOneof("strategy") == "default"
 
 
+async def test_nack_empty_reason_stays_absent_on_the_wire() -> None:
+    # An unspecified reason must be absent, not present-but-empty: the proto
+    # treats the distinction as meaningful (no worker reported a reason).
+    stub = FakeStub()
+    stub.Nack = FakeUnaryUnary(pb.NackResponse(job_id=VALID_UUID, dead_lettered=False))
+    client = make_client(stub)
+    await client.nack(_ctx(client))
+    req = stub.Nack.last_request  # type: ignore[attr-defined]
+    assert not req.HasField("reason")
+
+
 async def test_nack_directives_map_to_strategy() -> None:
     for directive, expected in [
         (RetryDirective.DEFAULT, "default"),
@@ -352,6 +363,84 @@ async def test_default_policy_does_not_retry() -> None:
     assert stub.Ack.calls == 1  # type: ignore[attr-defined]
 
 
+# -- enqueue retry duplication guard ------------------------------------------
+# DEADLINE_EXCEEDED and ABORTED are ambiguous for an enqueue: the request may
+# have committed server-side, so retrying could duplicate keyless jobs.
+
+
+async def test_keyless_enqueue_not_retried_on_ambiguous_code() -> None:
+    stub = FakeStub()
+    stub.EnqueueBatch = FakeUnaryUnary(error=rpc_error(grpc.StatusCode.DEADLINE_EXCEEDED))
+    client = make_client(stub, retry_policy=FAST_RETRY)
+    with pytest.raises(errors.TransportError):
+        await client.enqueue(EnqueueRequest("q", "t"))
+    assert stub.EnqueueBatch.calls == 1  # type: ignore[attr-defined]
+
+
+async def test_keyed_enqueue_retried_on_ambiguous_code() -> None:
+    stub = FakeStub()
+    stub.EnqueueBatch = FakeUnaryUnary(
+        sequence=[
+            rpc_error(grpc.StatusCode.DEADLINE_EXCEEDED),
+            _batch_response(_success()),
+        ]
+    )
+    client = make_client(stub, retry_policy=FAST_RETRY)
+    await client.enqueue(EnqueueRequest("q", "t", idempotency_key="k1"))
+    assert stub.EnqueueBatch.calls == 2  # type: ignore[attr-defined]
+
+
+async def test_keyless_enqueue_retried_on_unavailable() -> None:
+    # UNAVAILABLE means the request was rejected or never completed: safe to
+    # retry even without idempotency keys.
+    stub = FakeStub()
+    stub.EnqueueBatch = FakeUnaryUnary(
+        sequence=[
+            rpc_error(grpc.StatusCode.UNAVAILABLE),
+            _batch_response(_success()),
+        ]
+    )
+    client = make_client(stub, retry_policy=FAST_RETRY)
+    await client.enqueue(EnqueueRequest("q", "t"))
+    assert stub.EnqueueBatch.calls == 2  # type: ignore[attr-defined]
+
+
+async def test_enqueue_batch_one_keyless_job_disables_ambiguous_retry() -> None:
+    stub = FakeStub()
+    stub.EnqueueBatch = FakeUnaryUnary(error=rpc_error(grpc.StatusCode.ABORTED))
+    client = make_client(stub, retry_policy=FAST_RETRY)
+    with pytest.raises(errors.TransportError):
+        await client.enqueue_batch(
+            [EnqueueRequest("q", "t", idempotency_key="k1"), EnqueueRequest("q", "t")]
+        )
+    assert stub.EnqueueBatch.calls == 1  # type: ignore[attr-defined]
+
+
+async def test_keyless_enqueue_atomic_not_retried_on_ambiguous_code() -> None:
+    stub = FakeStub()
+    stub.EnqueueAtomic = FakeUnaryUnary(error=rpc_error(grpc.StatusCode.DEADLINE_EXCEEDED))
+    client = make_client(stub, retry_policy=FAST_RETRY)
+    with pytest.raises(errors.TransportError):
+        await client.enqueue_atomic([EnqueueRequest("q", "t")])
+    assert stub.EnqueueAtomic.calls == 1  # type: ignore[attr-defined]
+
+
+async def test_keyed_enqueue_atomic_retried_on_ambiguous_code() -> None:
+    stub = FakeStub()
+    stub.EnqueueAtomic = FakeUnaryUnary(
+        sequence=[
+            rpc_error(grpc.StatusCode.ABORTED),
+            pb.EnqueueAtomicResponse(
+                success=pb.EnqueueAtomicSuccess(responses=[pb.EnqueueResponse(job_id="a")])
+            ),
+        ]
+    )
+    client = make_client(stub, retry_policy=FAST_RETRY)
+    acks = await client.enqueue_atomic([EnqueueRequest("q", "t", idempotency_key="k1")])
+    assert [a.job_id for a in acks] == ["a"]
+    assert stub.EnqueueAtomic.calls == 2  # type: ignore[attr-defined]
+
+
 # -- deadlines & connect options ---------------------------------------------
 
 
@@ -457,6 +546,21 @@ async def test_connect_defaults_keep_grpc_message_cap(monkeypatch: pytest.Monkey
     client = await SeppClient.connect("127.0.0.1:1")
     assert "grpc.max_receive_message_length" not in [k for k, _ in captured["options"]]
     assert client._rpc_timeout == 30.0
+
+
+# -- version ----------------------------------------------------------------
+
+
+def test_version_resolves_installed_distribution() -> None:
+    # The distribution is named "sepp-py" (not "sepp"); the metadata lookup
+    # must actually resolve rather than fall back to the hardcoded default.
+    from importlib.metadata import version
+
+    import sepp
+    from sepp.client import _VERSION
+
+    assert sepp.__version__ == version("sepp-py")
+    assert _VERSION == sepp.__version__
 
 
 # -- helpers ----------------------------------------------------------------

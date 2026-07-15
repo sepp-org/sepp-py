@@ -1,7 +1,6 @@
 """Conversions between the generated protobuf messages and the domain types.
 
-Kept separate so :mod:`sepp.types` stays free of any protobuf imports. The
-client and worker call these to translate at the wire boundary.
+Kept separate so :mod:`sepp.types` stays free of protobuf imports.
 """
 
 from __future__ import annotations
@@ -43,8 +42,8 @@ def datetime_to_millis(dt: datetime) -> int:
     Pre-epoch instants yield a negative value (callers decide how to treat it)."""
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=timezone.utc)
-    # Exact integer arithmetic (matching Rust's Duration::as_millis); routing
-    # through float seconds can be off by 1ms for far-future / sub-ms instants.
+    # Integer arithmetic: routing through float seconds can be off by 1ms for
+    # far-future / sub-ms instants.
     return (dt - _EPOCH) // _ONE_MS
 
 
@@ -69,11 +68,7 @@ def now_millis() -> int:
 
 def timestamp_to_datetime(ts: _Timestamp) -> datetime | None:
     """A UTC datetime for a ``google.protobuf.Timestamp``, or ``None`` if it is
-    pre-epoch or not representable.
-
-    Mirrors the old ``millis_to_datetime`` semantics: pre-epoch instants (which
-    the int64-ms wire format expressed as a negative value) are rejected, as are
-    values outside the range a :class:`datetime.datetime` can hold."""
+    pre-epoch or not representable."""
     if ts.seconds < 0 or ts.nanos < 0:
         return None
     try:
@@ -240,7 +235,7 @@ def server_info_from_pb(r: pb.GetServerInfoResponse) -> ServerInfo:
         server_time=server_time,
         restricts_encodings=r.restricts_encodings,
         allowed_encodings=list(r.allowed_encodings),
-        max_payload_size=r.max_payload_bytes,
+        max_payload_bytes=r.max_payload_bytes,
         max_custom_entries=r.max_custom_entries,
         max_custom_total_bytes=r.max_custom_total_bytes,
         max_custom_key_bytes=r.max_custom_key_bytes,
@@ -308,10 +303,18 @@ def job_from_pb(client: SeppClient, j: pb.Job, worker_id: str | None) -> Job:
         custom=custom,
         trace_context=trace_context,
         lease_expires_at=lease_expires_at,
+        scheduled_at=_scheduled_at_from_pb(j),
         _lease=lease,
     )
 
     return Job(payload=payload, ctx=ctx)
+
+
+def _scheduled_at_from_pb(j: pb.Job) -> datetime | None:
+    # Unset means "was available immediately".
+    if not j.HasField("scheduled_at"):
+        return None
+    return timestamp_to_datetime(j.scheduled_at)
 
 
 _CAUSE_FROM_PB = {
@@ -368,9 +371,11 @@ def dead_letter_record_from_pb(r: pb.DeadLetterRecord) -> DeadLetterRecord:
         job_type=j.job_type,
         payload=payload,
         priority=priority,
+        max_attempts=j.max_attempts,
         custom=custom,
         trace_context=trace_context,
         enqueued_at=enqueued_at,
+        scheduled_at=_scheduled_at_from_pb(j),
         cause=_CAUSE_FROM_PB.get(r.cause, DeadLetterCause.UNSPECIFIED),
         failed_at=failed_at,
         final_attempt=r.final_attempt,

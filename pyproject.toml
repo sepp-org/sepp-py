@@ -47,6 +47,9 @@ Protocol = "https://github.com/sepp-org/proto"
 [dependency-groups]
 dev = [
     "mypy>=2.1.0",
+    # For examples/traced.py; deliberately not part of the otel extra, which
+    # stays api+sdk only (the host application owns the exporter).
+    "opentelemetry-exporter-otlp-proto-grpc>=1.42.1",
     "pytest>=9.1.1",
     "pytest-asyncio>=1.4.0",
     "ruff>=0.15.18",

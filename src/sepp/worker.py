@@ -10,7 +10,7 @@ linkage.
 A handler is an ``async def handler(payload, ctx) -> None``. Returning normally
 acks the job. Raising a :class:`HandlerError` nacks it with the chosen
 :class:`~sepp.client.RetryDirective`; raising any other exception nacks it for
-retry (the equivalent of the Rust client catching a panic)::
+retry::
 
     worker = Worker(client, ["emails"], timedelta(seconds=30), max_in_flight=32)
 
@@ -28,6 +28,7 @@ import contextlib
 import dataclasses
 import os
 import socket
+import time
 import uuid
 from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import dataclass
@@ -47,6 +48,12 @@ Handler = Callable[[Payload | None, JobCtx], Awaitable[None]]
 # Sentinel returned when a handler is aborted because its lease was lost — the
 # job must not be acked or nacked (another worker now owns it).
 _LEASE_LOST = object()
+
+# An empty reserve that returns well before its requested wait timeout (e.g. a
+# server draining at shutdown answers empty immediately) is backed off briefly
+# so the poll loop does not hammer the server.
+_EARLY_EMPTY_THRESHOLD = timedelta(milliseconds=100)
+_EARLY_EMPTY_BACKOFF = timedelta(milliseconds=250)
 
 
 class HandlerError(Exception):
@@ -130,6 +137,11 @@ class Worker:
 
     Each reserved job runs as its own task, bounded by ``max_in_flight``. A job
     whose ``job_type`` has no registered handler is nacked for retry.
+
+    With ``auto_extend`` on, a heartbeat keeps each in-flight job's lease alive
+    while its handler runs. Use with caution: a handler that hangs indefinitely
+    keeps its lease extended forever, so its job is never redelivered. Bound
+    hang-prone work yourself, e.g. with :func:`asyncio.timeout`.
     """
 
     def __init__(
@@ -150,6 +162,8 @@ class Worker:
         opts_kwargs: dict[str, object] = {"worker_id": resolved_worker_id, "max_jobs": max_jobs}
 
         if wait_timeout is not None:
+            if wait_timeout <= timedelta(0):
+                raise ValueError("wait_timeout must be at least 1ms")
             opts_kwargs["wait_timeout"] = wait_timeout
         self._opts = ReserveOptions(list(queues), lease_duration, **opts_kwargs)  # type: ignore[arg-type]
         self._client = client
@@ -228,6 +242,15 @@ class Worker:
         Does not return until the :class:`ShutdownHandle` is triggered *and* all
         in-flight jobs have finished draining. Reserve errors are logged and
         retried after ``reserve_error_backoff``; they do not stop the loop.
+
+        The drain wait is unbounded: a handler that never returns blocks the
+        return of ``run()`` indefinitely (and with ``auto_extend`` its lease is
+        kept alive the whole time) — see the class note on bounding hang-prone
+        handlers.
+
+        Cancelling ``run()`` is safe but not graceful: the pending reserve and
+        any in-flight job tasks are cancelled, abandoning their jobs to lease
+        expiry. Prefer the :class:`ShutdownHandle` for a graceful stop.
         """
         sem = asyncio.Semaphore(self._max_in_flight)
         tasks: set[asyncio.Task[None]] = set()
@@ -240,45 +263,65 @@ class Worker:
             self._auto_extend is not None,
         )
 
-        while not shutdown.is_shutdown:
-            # Acquire one permit (the reservation budget), racing shutdown.
-            _, shutdown_won = await self._or_shutdown(sem.acquire())
-            if shutdown_won:
-                break
-
-            opts = self._reserve_opts_with_capacity()
-            try:
-                result, shutdown_won = await self._or_shutdown(self._client.reserve(opts))
-            except errors.SeppError as err:
-                self._metrics.record_reserve_failed()
-                logger.warning(
-                    "reserve error: %s; backing off for %s", err, self._reserve_error_backoff
-                )
-                sem.release()
-                _, shutdown_won = await self._or_shutdown(
-                    asyncio.sleep(self._reserve_error_backoff.total_seconds())
-                )
+        try:
+            while not shutdown.is_shutdown:
+                # Acquire one permit (the reservation budget), racing shutdown.
+                _, shutdown_won = await self._or_shutdown(sem.acquire())
                 if shutdown_won:
                     break
-                continue
 
-            if shutdown_won:
-                sem.release()
-                break
+                opts = self._reserve_opts_with_capacity()
+                reserve_started = time.monotonic()
+                try:
+                    result, shutdown_won = await self._or_shutdown(self._client.reserve(opts))
+                except errors.SeppError as err:
+                    self._metrics.record_reserve_failed()
+                    logger.warning(
+                        "reserve error: %s; backing off for %s", err, self._reserve_error_backoff
+                    )
+                    sem.release()
+                    _, shutdown_won = await self._or_shutdown(
+                        asyncio.sleep(self._reserve_error_backoff.total_seconds())
+                    )
+                    if shutdown_won:
+                        break
+                    continue
 
-            jobs = cast("list[Job] | None", result)
-            if jobs is None:
-                self._metrics.record_reserve_ok(empty=True)
-                sem.release()
-                continue
+                if shutdown_won:
+                    sem.release()
+                    break
 
-            self._metrics.record_reserve_ok(empty=False)
-            # The first job inherits the permit already held; the rest acquire
-            # their own (which also throttles how fast we drain the batch).
-            self._spawn(tasks, sem, jobs[0])
-            for job in jobs[1:]:
-                await sem.acquire()
-                self._spawn(tasks, sem, job)
+                jobs = cast("list[Job] | None", result)
+                if jobs is None:
+                    self._metrics.record_reserve_ok(empty=True)
+                    sem.release()
+                    # See _EARLY_EMPTY_THRESHOLD: an empty answer well short of
+                    # the wait window gets a brief, shutdown-aware backoff.
+                    elapsed = timedelta(seconds=time.monotonic() - reserve_started)
+                    if elapsed < min(_EARLY_EMPTY_THRESHOLD, opts.wait_timeout / 2):
+                        _, shutdown_won = await self._or_shutdown(
+                            asyncio.sleep(_EARLY_EMPTY_BACKOFF.total_seconds())
+                        )
+                        if shutdown_won:
+                            break
+                    continue
+
+                self._metrics.record_reserve_ok(empty=False)
+                # The first job inherits the permit already held; the rest acquire
+                # their own (which also throttles how fast we drain the batch).
+                self._spawn(tasks, sem, jobs[0])
+                for job in jobs[1:]:
+                    await sem.acquire()
+                    self._spawn(tasks, sem, job)
+        except asyncio.CancelledError:
+            # Cancelled from outside (the reserve was already reaped by
+            # _or_shutdown): reap the in-flight job tasks too, abandoning their
+            # jobs to lease expiry, rather than leaking the tasks.
+            for t in list(tasks):
+                t.cancel()
+            if tasks:
+                await asyncio.gather(*list(tasks), return_exceptions=True)
+            raise
 
         logger.info("worker shutting down; waiting for in-flight jobs to finish")
         if tasks:
@@ -318,14 +361,23 @@ class Worker:
         Returns ``(result, False)`` if ``aw`` finished first (propagating its
         exception), or ``(None, True)`` if shutdown won (``aw`` is cancelled).
 
-        If both complete in the same step, the awaited result wins (unlike the
-        Rust client's biased shutdown-first select). This is deliberate: a
-        reserve that returned jobs just as shutdown fired gets processed rather
-        than abandoned to lease expiry — strictly friendlier, never lossy.
-        """
+        If both complete in the same step, the awaited result wins. This is
+        deliberate: a reserve that returned jobs just as shutdown fired gets
+        processed rather than abandoned to lease expiry."""
         task = asyncio.ensure_future(aw)
         sd = asyncio.ensure_future(self._shutdown._wait())
-        done, _ = await asyncio.wait({task, sd}, return_when=asyncio.FIRST_COMPLETED)
+        try:
+            done, _ = await asyncio.wait({task, sd}, return_when=asyncio.FIRST_COMPLETED)
+        except asyncio.CancelledError:
+            # The caller itself was cancelled. asyncio.wait leaves its children
+            # running, so reap both before propagating.
+            task.cancel()
+            sd.cancel()
+            with contextlib.suppress(BaseException):
+                await task
+            with contextlib.suppress(asyncio.CancelledError):
+                await sd
+            raise
 
         if sd in done and task not in done:
             task.cancel()
@@ -348,7 +400,7 @@ class Worker:
         handler = self._handlers.get(ctx.job_type) or self._catch_all_handler
         if handler is None:
             logger.warning("no handler registered for job_type `%s`", ctx.job_type)
-            # Mirror the Rust client: nack for retry, ignoring the outcome.
+            # Best-effort nack: if it fails, the job is redelivered at lease expiry.
             with contextlib.suppress(errors.SeppError):
                 await self._client.nack(
                     ctx, RetryDirective.DEFAULT, "no handler registered for job_type"
@@ -371,7 +423,7 @@ class Worker:
             return None
         except HandlerError as err:
             return err
-        except Exception as err:  # noqa: BLE001 - the panic-equivalent: nack and move on
+        except Exception as err:  # noqa: BLE001 - any handler failure nacks the job
             return err
 
     async def _run_with_auto_extend(self, handler: Handler, job: Job) -> object:
@@ -381,7 +433,7 @@ class Worker:
         # asyncio cancellation is cooperative — a handler could swallow the
         # CancelledError we inject on lease loss. So the heartbeat records its
         # decision in this flag, and it (not how the handler resolved) is
-        # authoritative, mirroring tokio's forceful abort + is_cancelled().
+        # authoritative.
         lease_lost = [False]
         handler_task = asyncio.ensure_future(handler(job.payload, ctx))
         hb_task = asyncio.ensure_future(
@@ -399,7 +451,7 @@ class Worker:
             outcome = _LEASE_LOST
         except HandlerError as err:
             outcome = err
-        except Exception as err:  # noqa: BLE001 - panic-equivalent
+        except Exception as err:  # noqa: BLE001 - any handler failure nacks the job
             outcome = err
         finally:
             hb_task.cancel()

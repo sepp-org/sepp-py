@@ -1,12 +1,13 @@
 """Integration tests against a real sepp server (testcontainers).
 
-Requires Docker. Skipped gracefully if Docker is unavailable or the container
-fails to start (mirrors the sepp-rs ``tests/integration.rs`` suite).
+Requires a server: a container runtime for the session container, or
+``SEPP_TEST_ADDR`` pointing at an already-running server.
 """
 
 from __future__ import annotations
 
 import asyncio
+import uuid
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -244,35 +245,57 @@ async def test_worker_processes_and_acks(client: SeppClient) -> None:
 
 
 async def test_worker_handler_error_nacks(client: SeppClient) -> None:
-    await client.enqueue(EnqueueRequest("q-werr-1", "failing", max_attempts=1))
+    # Unique queue: reruns against a shared server must not see leftovers.
+    queue = f"q-werr-{uuid.uuid4().hex[:8]}"
+    # Short worker lease and a generous attempt budget: the worker's in-flight
+    # long-poll can grab the immediately-redelivered job just as shutdown
+    # cancels it, stranding one delivery until that lease expires.
+    await client.enqueue(EnqueueRequest(queue, "failing", max_attempts=5))
 
-    worker = Worker(client, ["q-werr-1"], timedelta(seconds=30))
+    worker = Worker(client, [queue], timedelta(seconds=2))
     shutdown = worker.shutdown_handle()
 
     @worker.handler("failing")
     async def handle(payload: object, ctx: object) -> None:
-        raise HandlerError.retry("expected")
         shutdown.shutdown()
+        raise HandlerError.retry("expected")
 
-    # Let it nack and exit; start a second worker for the reserve
-    with pytest.raises(asyncio.TimeoutError):
-        await asyncio.wait_for(worker.run(), timeout=3)
+    await asyncio.wait_for(worker.run(), timeout=15)
+
+    # The nack made the job available again: re-reserve and observe the
+    # incremented attempt (>= 2 in case the worker raced another delivery in).
+    jobs = await client.reserve(
+        ReserveOptions([queue], timedelta(seconds=10), wait_timeout=timedelta(seconds=5))
+    )
+    assert jobs is not None
+    assert jobs[0].ctx.attempt >= 2
+    await client.ack(jobs[0].ctx)
 
 
 # -- worker: exception nacks ------------------------------------------------
 
 
 async def test_worker_exception_nacks(client: SeppClient) -> None:
-    await client.enqueue(EnqueueRequest("q-wexc-1", "panicky", max_attempts=1))
+    # See test_worker_handler_error_nacks for the queue/lease/attempt choices.
+    queue = f"q-wexc-{uuid.uuid4().hex[:8]}"
+    await client.enqueue(EnqueueRequest(queue, "panicky", max_attempts=5))
 
-    worker = Worker(client, ["q-wexc-1"], timedelta(seconds=30))
+    worker = Worker(client, [queue], timedelta(seconds=2))
+    shutdown = worker.shutdown_handle()
 
     @worker.handler("panicky")
     async def handle(payload: object, ctx: object) -> None:
+        shutdown.shutdown()
         raise RuntimeError("boom")
 
-    with pytest.raises(asyncio.TimeoutError):
-        await asyncio.wait_for(worker.run(), timeout=3)
+    await asyncio.wait_for(worker.run(), timeout=15)
+
+    jobs = await client.reserve(
+        ReserveOptions([queue], timedelta(seconds=10), wait_timeout=timedelta(seconds=5))
+    )
+    assert jobs is not None
+    assert jobs[0].ctx.attempt >= 2
+    await client.ack(jobs[0].ctx)
 
 
 # -- worker: catch-all handler ----------------------------------------------

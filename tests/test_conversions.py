@@ -7,8 +7,8 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from sepp import _convert, errors
-from sepp._pb import queue_pb2 as pb
 from sepp.types import DeadLetterCause, EnqueueRequest, Payload, Priority, TraceContext
+from sepp.v1 import queue_pb2 as pb
 from tests.conftest import (
     VALID_TP,
     VALID_UUID,
@@ -49,7 +49,7 @@ def test_datetime_to_millis_exact_integer_math() -> None:
 
 def test_datetime_to_millis_truncates_submillisecond() -> None:
     dt = datetime(1970, 1, 1, tzinfo=timezone.utc) + timedelta(microseconds=1500)
-    assert _convert.datetime_to_millis(dt) == 1  # 1.5ms truncates to 1, like Rust
+    assert _convert.datetime_to_millis(dt) == 1  # 1.5ms truncates to 1
 
 
 # -- primitives -------------------------------------------------------------
@@ -319,7 +319,7 @@ def _valid_server_info() -> pb.GetServerInfoResponse:
 def test_server_info_happy_path() -> None:
     info = _convert.server_info_from_pb(_valid_server_info())
     assert info.version == "1.2.3"
-    assert info.max_payload_size == 1024
+    assert info.max_payload_bytes == 1024
     assert info.max_lease_duration == timedelta(milliseconds=60_000)
     assert info.strict_queues is True
     assert info.dead_letter_retention_enabled is False
@@ -445,6 +445,31 @@ def test_job_from_pb_preserves_valid_trace_context() -> None:
     assert job.ctx.trace_context.tracestate == "v=1"
 
 
+def test_job_from_pb_unset_scheduled_at_is_none() -> None:
+    client = make_client(FakeStub())
+    job = _convert.job_from_pb(client, _valid_job(), None)
+    assert job.ctx.scheduled_at is None
+
+
+def test_job_from_pb_surfaces_scheduled_at() -> None:
+    client = make_client(FakeStub())
+    j = _valid_job()
+    scheduled = datetime(1970, 1, 1, tzinfo=timezone.utc) + timedelta(
+        milliseconds=1_700_000_030_000
+    )
+    j.scheduled_at.FromDatetime(scheduled)
+    job = _convert.job_from_pb(client, j, None)
+    assert job.ctx.scheduled_at == scheduled
+
+
+def test_job_from_pb_drops_invalid_scheduled_at() -> None:
+    client = make_client(FakeStub())
+    j = _valid_job()
+    j.scheduled_at.seconds = -1
+    job = _convert.job_from_pb(client, j, None)
+    assert job.ctx.scheduled_at is None
+
+
 # -- dead_letter_record_from_pb ---------------------------------------------
 
 
@@ -468,9 +493,21 @@ def test_dead_letter_record_from_pb() -> None:
     assert r.final_attempt == 5
     assert r.last_reason == "boom"
     assert r.priority == Priority(3)
+    assert r.max_attempts == 5
+    assert r.scheduled_at is None
     assert r.failed_at == datetime(1970, 1, 1, tzinfo=timezone.utc) + timedelta(
         milliseconds=1_700_000_100_000
     )
+
+
+def test_dead_letter_record_surfaces_scheduled_at() -> None:
+    msg = _valid_dead_letter()
+    scheduled = datetime(1970, 1, 1, tzinfo=timezone.utc) + timedelta(
+        milliseconds=1_700_000_030_000
+    )
+    msg.job.scheduled_at.FromDatetime(scheduled)
+    r = _convert.dead_letter_record_from_pb(msg)
+    assert r.scheduled_at == scheduled
 
 
 def test_dead_letter_record_missing_job() -> None:
@@ -512,7 +549,25 @@ def test_dead_letter_record_replays_into_its_queue() -> None:
     assert req.queue == "emails"
     assert req.job_type == "send_email"
     assert req.priority == Priority(3)
+    assert req.max_attempts == 5
     assert req.payload is not None and req.payload.data == b"\x01\x02\x03"
+
+
+def test_dead_letter_record_replay_does_not_reschedule() -> None:
+    # A replayed job should run now: the original scheduled_at is not copied.
+    msg = _valid_dead_letter()
+    msg.job.scheduled_at.FromDatetime(
+        datetime(1970, 1, 1, tzinfo=timezone.utc) + timedelta(milliseconds=1_700_000_030_000)
+    )
+    req = _convert.dead_letter_record_from_pb(msg).to_enqueue_request()
+    assert req.scheduled_at is None
+
+
+def test_dead_letter_record_replay_missing_max_attempts_uses_queue_default() -> None:
+    msg = _valid_dead_letter()
+    msg.job.max_attempts = 0  # absent in the snapshot
+    req = _convert.dead_letter_record_from_pb(msg).to_enqueue_request()
+    assert req.max_attempts is None
 
 
 def test_dead_letter_record_replays_nil_payload() -> None:

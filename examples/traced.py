@@ -14,9 +14,13 @@ Prerequisites — two things must be running:
            -p 16686:16686 -p 4317:4317 -p 4318:4318 \\
            jaegertracing/jaeger:latest
 
-Run it (needs the ``otel`` extra plus the OTLP exporter)::
+Run it (needs the ``otel`` extra plus the OTLP exporter, which this repo's dev
+dependency group provides)::
 
     uv run --extra otel python examples/traced.py
+
+Outside uv, install the exporter separately:
+``pip install opentelemetry-exporter-otlp-proto-grpc``.
 
 Then open your tracing backend, pick the ``sepp-py-example`` service, and open
 the most recent ``sepp.process`` trace. That span carries a *link* back to the
@@ -66,7 +70,7 @@ async def roundtrip() -> None:
         )
         print(f"enqueued job {ack.job_id}")
 
-    # 2. Run a worker. The client's `sepp.process` span links back to the
+    # 2. Run a worker. The worker's `sepp.process` span links back to the
     #    enqueue span recovered from the job's trace context.
     done: asyncio.Future[str] = asyncio.get_running_loop().create_future()
     worker = Worker(client, [QUEUE], timedelta(seconds=30))
@@ -82,11 +86,13 @@ async def roundtrip() -> None:
     worker_task = asyncio.create_task(worker.run())
     try:
         job_id = await asyncio.wait_for(asyncio.shield(done), timeout=15)
-        await asyncio.sleep(0.5)  # let the worker ack
         print(f"roundtrip OK — job {job_id} processed; check the trace in your backend")
     except asyncio.TimeoutError:
         print("timed out waiting for the job to be processed")
+        raise SystemExit(1) from None
     finally:
+        # shutdown() stops new reservations; awaiting `run` then drains what is
+        # in flight (including this job's ack) before returning.
         worker.shutdown_handle().shutdown()
         await worker_task
         await client.close()

@@ -1,10 +1,5 @@
-"""Domain types for the sepp client.
-
-These mirror the public value types of the Rust ``sepp-rs`` client, adapted to
-Python idioms: required fields are positional, optional fields are keyword
-arguments, and results are dataclasses. The wire (protobuf) representation is
-kept entirely in :mod:`sepp._convert`; nothing here imports the generated stubs.
-"""
+"""Domain types for the sepp client: payloads, priorities, enqueue requests,
+reserved jobs, and server metadata."""
 
 from __future__ import annotations
 
@@ -39,10 +34,7 @@ __all__ = [
     "DeadLetterRecord",
 ]
 
-# A JSON-primitive value stored in a job's ``custom`` metadata map. Unlike the
-# Rust ``Primitive`` enum, Python's native scalar types carry the distinction
-# directly, so callers pass ``str``/``int``/``float``/``bool`` as-is. Note that
-# ``bool`` is a subclass of ``int``; the conversion layer checks ``bool`` first.
+# A scalar value stored in a job's ``custom`` metadata map.
 Primitive = str | int | float | bool
 
 
@@ -54,6 +46,9 @@ class Payload:
     (for example ``"application/json"`` or ``"text/plain"``) is a hint the
     producer sets and the worker reads to decide how to deserialize the bytes. A
     queue may restrict which encodings it accepts.
+
+    The wire contract requires ``data`` to be non-empty: pass ``payload=None``
+    on the :class:`EnqueueRequest` for jobs that carry no data.
     """
 
     data: bytes
@@ -105,7 +100,6 @@ class Priority:
         return str(self.value)
 
 
-# Priority constants, mirroring Rust's Priority::P0 .. Priority::P9 / MIN / MAX.
 Priority.P0 = Priority(0)
 Priority.P1 = Priority(1)
 Priority.P2 = Priority(2)
@@ -257,7 +251,10 @@ class JobCtx:
     custom: dict[str, Primitive]
     trace_context: TraceContext | None
     lease_expires_at: datetime
-    # Internal lease handle, attached by the conversion layer.
+    # The producer's requested execution time, or ``None`` if the job was
+    # enqueued for immediate delivery.
+    scheduled_at: datetime | None = None
+    # Internal lease handle, set when the job is reserved.
     _lease: Lease | None = field(default=None, repr=False, compare=False)
 
     async def extend(self, extension: timedelta) -> datetime:
@@ -333,7 +330,7 @@ class ServerInfo:
     server_time: datetime
     restricts_encodings: bool
     allowed_encodings: list[str]
-    max_payload_size: int
+    max_payload_bytes: int
     max_custom_entries: int
     max_custom_total_bytes: int
     max_custom_key_bytes: int
@@ -354,8 +351,7 @@ class ServerInfo:
 
 
 class DeadLetterCause(enum.Enum):
-    """Why a job was moved to the server's dead-letter store. Mirrors the
-    terminal paths a job can take."""
+    """Why a job was moved to the server's dead-letter store."""
 
     UNSPECIFIED = "unspecified"
     """The cause was unset — an unknown or future variant."""
@@ -385,9 +381,13 @@ class DeadLetterRecord:
     job_type: str
     payload: Payload | None
     priority: Priority
+    max_attempts: int
     custom: dict[str, Primitive]
     trace_context: TraceContext | None
     enqueued_at: datetime
+    # The producer's requested execution time, or ``None`` if the job was
+    # enqueued for immediate delivery.
+    scheduled_at: datetime | None
     cause: DeadLetterCause
     failed_at: datetime
     final_attempt: int
@@ -395,14 +395,16 @@ class DeadLetterRecord:
 
     def to_enqueue_request(self) -> EnqueueRequest:
         """Build an :class:`EnqueueRequest` that replays this job into its
-        original queue, preserving its payload, priority, custom metadata, and
-        trace context. The replay is a fresh job — the server assigns a new id
-        and resets the attempt counter."""
+        original queue, preserving its payload, priority, max attempts, custom
+        metadata, and trace context. The replay is a fresh job — the server
+        assigns a new id and resets the attempt counter — and it runs now:
+        the original ``scheduled_at`` is deliberately not carried over."""
         return EnqueueRequest(
             queue=self.queue,
             job_type=self.job_type,
             payload=self.payload,
             priority=self.priority,
+            max_attempts=self.max_attempts or None,
             custom=dict(self.custom),
             trace_context=self.trace_context,
         )
