@@ -366,6 +366,12 @@ class Worker:
         processed rather than abandoned to lease expiry."""
         task = asyncio.ensure_future(aw)
         sd = asyncio.ensure_future(self._shutdown._wait())
+        # Reaping a child below must not use `suppress(CancelledError): await
+        # child`: if run() itself is cancelled while parked on that await, its
+        # own CancelledError surfaces there and would be suppressed too,
+        # leaving the worker running after a cancel. gather(...,
+        # return_exceptions=True) absorbs only the child's cancellation and
+        # still propagates the caller's.
         try:
             done, _ = await asyncio.wait({task, sd}, return_when=asyncio.FIRST_COMPLETED)
         except asyncio.CancelledError:
@@ -373,22 +379,17 @@ class Worker:
             # running, so reap both before propagating.
             task.cancel()
             sd.cancel()
-            with contextlib.suppress(BaseException):
-                await task
-            with contextlib.suppress(asyncio.CancelledError):
-                await sd
+            await asyncio.gather(task, sd, return_exceptions=True)
             raise
 
         if sd in done and task not in done:
             task.cancel()
-            with contextlib.suppress(BaseException):
-                await task
+            await asyncio.gather(task, return_exceptions=True)
             return None, True
 
         if not sd.done():
             sd.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await sd
+            await asyncio.gather(sd, return_exceptions=True)
         return task.result(), False
 
     async def _process_job(self, job: Job) -> None:
@@ -455,8 +456,8 @@ class Worker:
             outcome = err
         finally:
             hb_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await hb_task
+            # gather, not suppress(CancelledError): see _or_shutdown.
+            await asyncio.gather(hb_task, return_exceptions=True)
 
         # The heartbeat's verdict wins even if the handler completed or swallowed
         # the cancellation: a job whose lease was reassigned must not be acked or

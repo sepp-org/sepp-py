@@ -31,8 +31,8 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# Mirrors the Rust client's default-on `opentelemetry` feature: spans, metrics,
-# and W3C trace-context propagation from producer to worker.
+# Spans, worker metrics, and W3C trace-context propagation from producer to
+# worker.
 otel = [
     "opentelemetry-api>=1.42.1",
     "opentelemetry-sdk>=1.42.1",
@@ -52,6 +52,7 @@ dev = [
     "opentelemetry-exporter-otlp-proto-grpc>=1.42.1",
     "pytest>=9.1.1",
     "pytest-asyncio>=1.4.0",
+    "pytest-timeout>=2.4.0",
     "ruff>=0.15.18",
     "testcontainers>=4.14.2",
     "types-protobuf>=7.34.1.20260518",
@@ -63,6 +64,7 @@ packages = ["src/sepp"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+timeout = 300
 
 [tool.ruff]
 src = ["src", "tests", "examples"]
