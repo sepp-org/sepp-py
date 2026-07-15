@@ -60,6 +60,7 @@ async def test_enqueue_single_with_payload(client: SeppClient) -> None:
     )
     assert ack.job_id
 
+
 # -- enqueue batch ----------------------------------------------------------
 
 
